@@ -40,6 +40,17 @@ func TestRenderAppShellAtSupportedSizes(t *testing.T) {
 	}
 }
 
+func TestAppShellIncludesCodesNavigation(t *testing.T) {
+	selected := "Codes"
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(style.NewTheme(false))
+		renderAppShell(c, &selected, func() {})
+	}, 1024, 768)
+	if !tester.HasText("Códigos") {
+		t.Fatal("codes navigation item is missing")
+	}
+}
+
 func writeMainPreview(t *testing.T, name string, rendered *image.RGBA) {
 	directory := os.Getenv("ARDORA_PREVIEW_DIR")
 	if directory == "" {

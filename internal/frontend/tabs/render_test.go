@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -35,7 +36,14 @@ func TestRepresentativeTabStatesRenderAtSupportedSizes(t *testing.T) {
 			{ID: 2, Name: "Código Secreto", MinPlayers: 2, MaxPlayers: 8, Active: false},
 		}}).View,
 		"games_modal": (&GamesTab{state: state, showModal: true, formGame: models.Game{Active: true, MinPlayers: 1, MaxPlayers: 4}, formMsg: "Informe o nome do jogo."}).View,
-		"sales":       (&SalesTab{state: state, billQty: "1"}).View,
+		"codes_empty": (&CodesTab{state: state, quantity: "1", stats: models.AccessCodeStats{NextNumber: 1}}).View,
+		"codes_populated": (&CodesTab{state: state, quantity: "3", stats: models.AccessCodeStats{Total: 3, Available: 1, InUse: 1, Archived: 1, NextNumber: 4},
+			batches: []models.AccessCodeBatch{{ID: 1, FirstNumber: 1, LastNumber: 3, Quantity: 3, CreatedAt: time.Date(2026, 11, 11, 10, 0, 0, 0, time.Local)}},
+			codes:   []models.AccessCode{{ID: 1, BatchID: 1, Number: 1, Value: "001", Active: true, State: models.AccessCodeAvailable}, {ID: 2, BatchID: 1, Number: 2, Value: "002", Active: true, State: models.AccessCodeInUse}, {ID: 3, BatchID: 1, Number: 3, Value: "003", State: models.AccessCodeArchived}},
+		}).View,
+		"codes_error":    (&CodesTab{state: state, quantity: "1", err: errors.New("falha simulada")}).View,
+		"codes_feedback": (&CodesTab{state: state, quantity: "2", stats: models.AccessCodeStats{NextNumber: 1}, msg: "Não foi possível imprimir o lote: falha simulada", msgOK: false}).View,
+		"sales":          (&SalesTab{state: state, billQty: "1"}).View,
 		"sales_feedback": (&SalesTab{
 			state: state, billQty: "1", registerMsg: "Entrada registrada com sucesso.", registerOK: true, billMsg: "Informe um ID de produto válido.",
 		}).View,

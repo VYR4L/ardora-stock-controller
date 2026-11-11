@@ -8,16 +8,18 @@ import (
 
 // State holds all dependencies needed by the UI tabs.
 type State struct {
-	Window               *mygo.Window
-	Layout               paths.Layout
-	ImageService         *services.ImageService
-	GameService          *services.GameService
-	ProductService       *services.ProductService
-	SalesService         *services.SalesService
-	VisitService         *services.VisitService
-	ReceiptService       *services.ReceiptService
-	TableService         *services.TableService
-	TablesClientsService *services.TablesClientsService
-	TableGameService     *services.TableGameService
-	Navigate             func(destination string)
+	Window                 *mygo.Window
+	Layout                 paths.Layout
+	ImageService           *services.ImageService
+	GameService            *services.GameService
+	ProductService         *services.ProductService
+	SalesService           *services.SalesService
+	VisitService           *services.VisitService
+	ReceiptService         *services.ReceiptService
+	AccessCodeService      *services.AccessCodeService
+	AccessCodePrintService *services.AccessCodePrintService
+	TableService           *services.TableService
+	TablesClientsService   *services.TablesClientsService
+	TableGameService       *services.TableGameService
+	Navigate               func(destination string)
 }
