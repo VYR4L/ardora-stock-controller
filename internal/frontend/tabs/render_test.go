@@ -48,6 +48,9 @@ func TestRepresentativeTabStatesRenderAtSupportedSizes(t *testing.T) {
 		"sales_feedback": (&SalesTab{
 			state: state, billQty: "1", registerMsg: "Entrada registrada com sucesso.", registerOK: true, billMsg: "Informe um ID de produto válido.",
 		}).View,
+		"sales_scanner_feedback": (&SalesTab{
+			state: state, billQty: "1", clientCard: "007", registerMsg: "Comanda 007 disponível.", registerOK: true, lookupMsg: "Comanda não encontrada.",
+		}).View,
 		"sales_empty_with_receipt": (&SalesTab{
 			state: state, billQty: "1", completed: []models.Visit{{ID: 2, ClientName: "Bia", CardNumber: 8, FinalTotalCents: 2500, ReceiptIdentifier: "REC-000002"}},
 		}).View,
@@ -172,6 +175,25 @@ func TestSalesKeyboardFocusOrder(t *testing.T) {
 	tester.Key(0, ui.KeyTab)
 	if !tester.Focused("CPF ou documento") {
 		t.Fatal("second Tab did not focus the document field")
+	}
+	tester.Key(0, ui.KeyTab)
+	if !tester.Focused("Código da comanda *") {
+		t.Fatal("third Tab did not focus the check-in code field")
+	}
+
+	for attempts := 0; attempts < 6 && !tester.Focused("Produto *"); attempts++ {
+		tester.Key(0, ui.KeyTab)
+	}
+	if !tester.Focused("Produto *") {
+		t.Fatal("Tab navigation did not reach the product field")
+	}
+	tester.Key(0, ui.KeyTab)
+	if !tester.Focused("Quantidade *") {
+		t.Fatal("quantity did not follow product in the focus order")
+	}
+	tester.Key(0, ui.KeyTab)
+	if !tester.Focused("Código da comanda *") {
+		t.Fatal("billing code did not follow quantity in the focus order")
 	}
 }
 

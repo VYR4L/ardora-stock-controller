@@ -96,7 +96,7 @@ func (t *TablesTab) View(c *ui.Context) {
 		case len(t.overviews) == 0:
 			components.EmptyState(c, "Nenhuma mesa cadastrada", "Crie a primeira mesa para montar a visão do salão.", nil)
 		default:
-			components.Panel(c, "Visão do salão", "Cada cartão reúne clientes e o jogo atual da mesa.", 0, func() {
+			components.Panel(c, "Visão do salão", "Cada comanda reúne clientes e o jogo atual da mesa.", 0, func() {
 				ui.Row(c).Gap(12).Wrap().AlignItems(ui.Start).Children(func() {
 					for _, overview := range t.overviews {
 						t.renderTable(c, overview)
@@ -144,7 +144,7 @@ func (t *TablesTab) renderTable(c *ui.Context, overview models.TableOverview) {
 			for _, client := range overview.Clients {
 				label := client.Name
 				if client.ActiveCard != nil {
-					label = fmt.Sprintf("Cartão %03d · %s", *client.ActiveCard, client.Name)
+					label = fmt.Sprintf("Comanda %03d · %s", *client.ActiveCard, client.Name)
 				}
 				ui.Text(c, label).FontSize(12).TextColor(tokens.Text)
 			}
@@ -336,7 +336,7 @@ func (t *TablesTab) normalizeSelections() {
 
 func tableOption(table models.Table) string { return fmt.Sprintf("%s (#%d)", table.Name, table.ID) }
 func clientVisitOption(visit models.Visit) string {
-	return fmt.Sprintf("Cartão %03d · %s (#%d)", visit.CardNumber, visit.ClientName, visit.ClientID)
+	return fmt.Sprintf("%s · %s (#%d)", visitCodeLabel(visit), visit.ClientName, visit.ClientID)
 }
 func gameOption(game models.Game) string      { return fmt.Sprintf("%s (#%d)", game.Name, game.ID) }
 func ownerOption(client models.Client) string { return fmt.Sprintf("%s (#%d)", client.Name, client.ID) }
