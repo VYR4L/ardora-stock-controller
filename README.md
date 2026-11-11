@@ -20,6 +20,7 @@ A aplicação funciona de maneira totalmente local (offline-first), garantindo c
 
 ### 👥 Comandas & Vendas (PDV)
 - **Controle por Comanda:** Vinculação de comandas numeradas (0 a 999) por cliente.
+- **Códigos Físicos Reutilizáveis:** Geração em lotes com QR Code e Code 128, impressão A4 e liberação automática após o fechamento.
 - **Taxa de Entrada & Consumo:** Registro rápido de taxa de entrada (couvert/day use) e itens consumidos.
 - **Fechamento de Conta:** Cálculo automático com suporte a descontos customizados.
 - **Métodos de Pagamento:** Suporte a Dinheiro, Pix, Cartão de Crédito, Cartão de Débito e Outros.
@@ -42,6 +43,17 @@ A aplicação funciona de maneira totalmente local (offline-first), garantindo c
 ### ⚙️ Configurações & Backups
 - **Tema Claro / Escuro:** Alternância de tema com persistência das preferências do usuário.
 - **Backups CSV:** Exportação automática e sob demanda de relatórios e dados diários.
+
+---
+
+## 🧾 Operação com Códigos de Comanda
+
+- Leitores USB de QR Code ou código de barras funcionam como teclado: mantenha o campo contextual focado e configure o leitor para finalizar cada leitura com `Enter`.
+- O QR Code e o Code 128 impressos em uma etiqueta carregam exatamente o mesmo valor textual, como `001`; o sistema não diferencia a tecnologia usada na leitura.
+- No check-in, a leitura apenas valida e preenche o código. A comanda só é atribuída ao cliente após a confirmação explícita em **Registrar entrada**.
+- Em **Lançar produto**, selecione o produto e a quantidade antes de ler a comanda. Em **Fechar comanda**, a leitura apenas abre a prévia; o fechamento e o pagamento continuam explícitos.
+- **Imprimir** ou reimprimir um lote existente nunca reserva novos números. Somente **Gerar códigos** avança a sequência.
+- Nos catálogos, **Excluir** se torna **Arquivar** quando o item possui histórico. Cadastros arquivados permanecem em relatórios e podem ser reativados pela edição.
 
 ---
 
