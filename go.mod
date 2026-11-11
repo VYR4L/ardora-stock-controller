@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/boombuler/barcode v1.0.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
