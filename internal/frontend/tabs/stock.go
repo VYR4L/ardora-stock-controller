@@ -17,28 +17,71 @@ import (
 )
 
 type StockTab struct {
-	state *frontend.State
+	state   *frontend.State
+	actions stockActions
+	update  func(func())
 
 	loading  bool
 	products []models.Product
 	err      error
 	query    string
 	pageMsg  string
+	pageOK   bool
 
 	showModal bool
 	formItem  models.Product
 	formImage string
 	formMsg   string
 	saving    bool
+
+	showRemove   bool
+	removeTarget models.Product
+	removePlan   models.RemovalPlan
+	removeBusy   bool
+}
+
+type stockActions struct {
+	create      func(context.Context, *models.Product) error
+	update      func(context.Context, *models.Product) error
+	planRemoval func(context.Context, int64) (models.RemovalPlan, error)
+	remove      func(context.Context, int64) (models.RemovalPlan, error)
+}
+
+type removalConfirmationCopy struct {
+	ConfirmLabel string
+	Danger       bool
+}
+
+func removalConfirmation(plan models.RemovalPlan) removalConfirmationCopy {
+	if plan.Kind == models.RemovalDelete {
+		return removalConfirmationCopy{ConfirmLabel: "Excluir definitivamente", Danger: true}
+	}
+	return removalConfirmationCopy{ConfirmLabel: "Arquivar"}
 }
 
 func NewStockTab(s *frontend.State) *StockTab {
 	t := &StockTab{state: s}
+	if s != nil {
+		if s.ProductService != nil {
+			t.actions = stockActions{
+				create:      s.ProductService.Create,
+				update:      s.ProductService.Update,
+				planRemoval: s.ProductService.PlanRemoval,
+				remove:      s.ProductService.Remove,
+			}
+		}
+		if s.Window != nil {
+			t.update = s.Window.Update
+		}
+	}
 	t.loadProducts()
 	return t
 }
 
 func (t *StockTab) loadProducts() {
+	if t.state == nil || t.state.ProductService == nil || t.state.Window == nil {
+		return
+	}
 	t.loading = true
 	go func() {
 		products, err := t.state.ProductService.List(context.Background(), false)
@@ -55,7 +98,7 @@ func (t *StockTab) View(c *ui.Context) {
 		components.PageHeader(c, "CATÁLOGO", "Estoque", "Acompanhe preços, disponibilidade e níveis mínimos dos produtos.", &components.Action{Label: "Novo produto", Run: t.openCreate})
 
 		if t.pageMsg != "" {
-			components.FeedbackBanner(c, t.pageMsg, components.ToneSuccess)
+			components.FeedbackBanner(c, t.pageMsg, feedbackTone(t.pageOK))
 		}
 
 		if t.loading {
@@ -68,6 +111,7 @@ func (t *StockTab) View(c *ui.Context) {
 	})
 
 	t.renderModal(c)
+	t.renderRemoveModal(c)
 }
 
 func (t *StockTab) renderContent(c *ui.Context) {
@@ -148,6 +192,14 @@ func (t *StockTab) renderProduct(c *ui.Context, product models.Product) {
 				components.StatusBadge(c, "Inativo", components.ToneNeutral)
 			}
 		})
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, "Editar").Clicked() {
+				t.openEdit(product)
+			}
+			if ui.Button(c, "Excluir").Clicked() {
+				t.requestRemoval(product)
+			}
+		})
 	})
 }
 
@@ -158,10 +210,21 @@ func (t *StockTab) openCreate() {
 	t.showModal = true
 }
 
+func (t *StockTab) openEdit(product models.Product) {
+	t.formItem = product
+	t.formImage = ""
+	t.formMsg = ""
+	t.showModal = true
+}
+
 func (t *StockTab) renderModal(c *ui.Context) {
 	ui.Modal(c, &t.showModal, func() {
 		ui.Column(c).Gap(18).Width(680).MaxWidthPercent(88).Padding(8).Children(func() {
-			components.SectionHeader(c, "Novo produto", "Preencha os dados que aparecerão no estoque.")
+			title, subtitle := "Novo produto", "Preencha os dados que aparecerão no estoque."
+			if t.formItem.ID != 0 {
+				title, subtitle = "Editar produto", "Atualize os dados do produto ou reative seu cadastro."
+			}
+			components.SectionHeader(c, title, subtitle)
 			if t.formMsg != "" {
 				components.FeedbackBanner(c, t.formMsg, components.ToneDanger)
 			}
@@ -198,6 +261,8 @@ func (t *StockTab) renderModal(c *ui.Context) {
 					name := "Nenhum arquivo selecionado"
 					if t.formImage != "" {
 						name = filepath.Base(t.formImage)
+					} else if t.formItem.Image != "" {
+						name = filepath.Base(t.formItem.Image) + " (imagem atual)"
 					}
 					ui.Text(c, name).FontSize(12).TextColor(style.FromContext(c).Muted).Grow(1)
 					if ui.Button(c, "Escolher imagem").Disabled(t.saving).Clicked() {
@@ -205,6 +270,7 @@ func (t *StockTab) renderModal(c *ui.Context) {
 					}
 				})
 			})
+			ui.Checkbox(c, &t.formItem.Active, "Ativo").Disabled(t.saving)
 
 			components.FormActions(c,
 				components.Action{Label: savingLabel(t.saving), Disabled: t.saving, Run: t.saveForm},
@@ -248,7 +314,7 @@ func (t *StockTab) saveForm() {
 	t.saving = true
 	t.formMsg = ""
 	go func() {
-		imageName := ""
+		imageName := t.formItem.Image
 		if t.formImage != "" {
 			name, err := t.state.ImageService.StoreCopy(t.formImage)
 			if err != nil {
@@ -265,18 +331,87 @@ func (t *StockTab) saveForm() {
 		item.Name = strings.TrimSpace(item.Name)
 		item.Category = strings.TrimSpace(item.Category)
 		item.Image = imageName
-		err := t.state.ProductService.Create(context.Background(), &item)
-		t.state.Window.Update(func() {
+		var err error
+		if item.ID == 0 {
+			err = t.actions.create(context.Background(), &item)
+		} else {
+			err = t.actions.update(context.Background(), &item)
+		}
+		t.runUpdate(func() {
 			t.saving = false
 			if err != nil {
-				t.formMsg = "Não foi possível criar o produto: " + err.Error()
+				t.formMsg = "Não foi possível salvar o produto: " + err.Error()
 				return
 			}
 			t.showModal = false
-			t.pageMsg = "Produto cadastrado com sucesso."
+			t.pageOK = true
+			if t.formItem.ID == 0 {
+				t.pageMsg = "Produto cadastrado com sucesso."
+			} else {
+				t.pageMsg = "Produto atualizado com sucesso."
+			}
 			t.loadProducts()
 		})
 	}()
+}
+
+func (t *StockTab) requestRemoval(product models.Product) {
+	if t.removeBusy || t.actions.planRemoval == nil {
+		return
+	}
+	t.removeBusy, t.pageMsg = true, ""
+	go func() {
+		plan, err := t.actions.planRemoval(context.Background(), product.ID)
+		t.runUpdate(func() {
+			t.removeBusy = false
+			if err != nil {
+				t.pageOK, t.pageMsg = false, "Não foi possível verificar o produto: "+err.Error()
+				return
+			}
+			if plan.Kind == models.RemovalBlocked {
+				t.pageOK, t.pageMsg, t.showRemove = false, plan.Message, false
+				return
+			}
+			t.removeTarget, t.removePlan, t.showRemove = product, plan, true
+		})
+	}()
+}
+
+func (t *StockTab) renderRemoveModal(c *ui.Context) {
+	copy := removalConfirmation(t.removePlan)
+	components.ConfirmationModal(c, &t.showRemove, "Remover produto", t.removePlan.Message, copy.ConfirmLabel, copy.Danger, t.removeBusy, t.confirmRemoval, func() { t.showRemove = false })
+}
+
+func (t *StockTab) confirmRemoval() {
+	if t.removeBusy || t.actions.remove == nil || t.removeTarget.ID == 0 {
+		return
+	}
+	t.removeBusy = true
+	go func() {
+		plan, err := t.actions.remove(context.Background(), t.removeTarget.ID)
+		t.runUpdate(func() {
+			t.removeBusy = false
+			if err != nil {
+				t.pageOK, t.pageMsg = false, "Não foi possível remover o produto: "+err.Error()
+				return
+			}
+			t.showRemove, t.pageOK = false, true
+			if plan.Kind == models.RemovalDelete {
+				t.pageMsg = "Produto excluído definitivamente."
+			} else {
+				t.pageMsg = "Produto arquivado. Edite-o para reativar quando necessário."
+			}
+			t.loadProducts()
+		})
+	}()
+}
+
+func (t *StockTab) runUpdate(fn func()) {
+	if t.update != nil {
+		t.update(fn)
+		return
+	}
+	fn()
 }
 
 func savingLabel(saving bool) string {

@@ -17,28 +17,59 @@ import (
 )
 
 type GamesTab struct {
-	state *frontend.State
+	state   *frontend.State
+	actions gameActions
+	update  func(func())
 
 	loading bool
 	games   []models.Game
 	err     error
 	query   string
 	pageMsg string
+	pageOK  bool
 
 	showModal bool
 	formGame  models.Game
 	formImage string
 	formMsg   string
 	saving    bool
+
+	showRemove   bool
+	removeTarget models.Game
+	removePlan   models.RemovalPlan
+	removeBusy   bool
+}
+
+type gameActions struct {
+	create      func(context.Context, *models.Game) error
+	update      func(context.Context, *models.Game) error
+	planRemoval func(context.Context, int64) (models.RemovalPlan, error)
+	remove      func(context.Context, int64) (models.RemovalPlan, error)
 }
 
 func NewGamesTab(s *frontend.State) *GamesTab {
 	t := &GamesTab{state: s}
+	if s != nil {
+		if s.GameService != nil {
+			t.actions = gameActions{
+				create:      s.GameService.Create,
+				update:      s.GameService.Update,
+				planRemoval: s.GameService.PlanRemoval,
+				remove:      s.GameService.Remove,
+			}
+		}
+		if s.Window != nil {
+			t.update = s.Window.Update
+		}
+	}
 	t.loadGames()
 	return t
 }
 
 func (t *GamesTab) loadGames() {
+	if t.state == nil || t.state.GameService == nil || t.state.Window == nil {
+		return
+	}
 	t.loading = true
 	go func() {
 		games, err := t.state.GameService.List(context.Background(), false)
@@ -55,7 +86,7 @@ func (t *GamesTab) View(c *ui.Context) {
 		components.PageHeader(c, "CATÁLOGO", "Jogos", "Encontre rapidamente os títulos e confira a faixa de jogadores.", &components.Action{Label: "Novo jogo", Run: t.openCreate})
 
 		if t.pageMsg != "" {
-			components.FeedbackBanner(c, t.pageMsg, components.ToneSuccess)
+			components.FeedbackBanner(c, t.pageMsg, feedbackTone(t.pageOK))
 		}
 		if t.loading {
 			components.LoadingState(c, "Carregando jogos", "Preparando o catálogo da luderia.")
@@ -67,6 +98,7 @@ func (t *GamesTab) View(c *ui.Context) {
 	})
 
 	t.renderModal(c)
+	t.renderRemoveModal(c)
 }
 
 func (t *GamesTab) renderContent(c *ui.Context) {
@@ -124,7 +156,22 @@ func (t *GamesTab) renderGame(c *ui.Context, game models.Game) {
 		} else {
 			components.StatusBadge(c, "Inativo", components.ToneNeutral)
 		}
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, "Editar").Clicked() {
+				t.openEdit(game)
+			}
+			if ui.Button(c, "Excluir").Clicked() {
+				t.requestRemoval(game)
+			}
+		})
 	})
+}
+
+func (t *GamesTab) openEdit(game models.Game) {
+	t.formGame = game
+	t.formImage = ""
+	t.formMsg = ""
+	t.showModal = true
 }
 
 func (t *GamesTab) openCreate() {
@@ -137,13 +184,20 @@ func (t *GamesTab) openCreate() {
 func (t *GamesTab) renderModal(c *ui.Context) {
 	ui.Modal(c, &t.showModal, func() {
 		ui.Column(c).Gap(18).Width(620).MaxWidthPercent(88).Padding(8).Children(func() {
-			components.SectionHeader(c, "Novo jogo", "Cadastre um título e sua faixa de jogadores.")
+			title, subtitle := "Novo jogo", "Cadastre um título e sua faixa de jogadores."
+			if t.formGame.ID != 0 {
+				title, subtitle = "Editar jogo", "Atualize os dados do jogo ou reative seu cadastro."
+			}
+			components.SectionHeader(c, title, subtitle)
 			if t.formMsg != "" {
 				components.FeedbackBanner(c, t.formMsg, components.ToneDanger)
 			}
 
 			ui.Field(c, "Nome *", func() {
 				ui.TextInput(c, &t.formGame.Name).Disabled(t.saving)
+			})
+			ui.Field(c, "Observações", func() {
+				ui.TextArea(c, &t.formGame.Notes).Lines(2, 5).Disabled(t.saving)
 			})
 			ui.Row(c).Gap(12).Wrap().Children(func() {
 				ui.Field(c, "Mínimo de jogadores", func() {
@@ -159,12 +213,15 @@ func (t *GamesTab) renderModal(c *ui.Context) {
 					}
 				}).MinWidth(200).Grow(1)
 			})
+			ui.Checkbox(c, &t.formGame.Active, "Ativo").Disabled(t.saving)
 
 			ui.Field(c, "Capa do jogo", func() {
 				ui.Row(c).Gap(10).Wrap().AlignItems(ui.Center).Children(func() {
 					name := "Nenhum arquivo selecionado"
 					if t.formImage != "" {
 						name = filepath.Base(t.formImage)
+					} else if t.formGame.Image != "" {
+						name = filepath.Base(t.formGame.Image) + " (capa atual)"
 					}
 					ui.Text(c, name).FontSize(12).TextColor(style.FromContext(c).Muted).Grow(1)
 					if ui.Button(c, "Escolher imagem").Disabled(t.saving).Clicked() {
@@ -215,7 +272,7 @@ func (t *GamesTab) saveForm() {
 	t.saving = true
 	t.formMsg = ""
 	go func() {
-		imageName := ""
+		imageName := t.formGame.Image
 		if t.formImage != "" {
 			name, err := t.state.ImageService.StoreCopy(t.formImage)
 			if err != nil {
@@ -231,16 +288,85 @@ func (t *GamesTab) saveForm() {
 		game := t.formGame
 		game.Name = strings.TrimSpace(game.Name)
 		game.Image = imageName
-		err := t.state.GameService.Create(context.Background(), &game)
-		t.state.Window.Update(func() {
+		var err error
+		if game.ID == 0 {
+			err = t.actions.create(context.Background(), &game)
+		} else {
+			err = t.actions.update(context.Background(), &game)
+		}
+		t.runUpdate(func() {
 			t.saving = false
 			if err != nil {
-				t.formMsg = "Não foi possível criar o jogo: " + err.Error()
+				t.formMsg = "Não foi possível salvar o jogo: " + err.Error()
 				return
 			}
 			t.showModal = false
-			t.pageMsg = "Jogo cadastrado com sucesso."
+			t.pageOK = true
+			if t.formGame.ID == 0 {
+				t.pageMsg = "Jogo cadastrado com sucesso."
+			} else {
+				t.pageMsg = "Jogo atualizado com sucesso."
+			}
 			t.loadGames()
 		})
 	}()
+}
+
+func (t *GamesTab) requestRemoval(game models.Game) {
+	if t.removeBusy || t.actions.planRemoval == nil {
+		return
+	}
+	t.removeBusy, t.pageMsg = true, ""
+	go func() {
+		plan, err := t.actions.planRemoval(context.Background(), game.ID)
+		t.runUpdate(func() {
+			t.removeBusy = false
+			if err != nil {
+				t.pageOK, t.pageMsg = false, "Não foi possível verificar o jogo: "+err.Error()
+				return
+			}
+			if plan.Kind == models.RemovalBlocked {
+				t.pageOK, t.pageMsg, t.showRemove = false, plan.Message, false
+				return
+			}
+			t.removeTarget, t.removePlan, t.showRemove = game, plan, true
+		})
+	}()
+}
+
+func (t *GamesTab) renderRemoveModal(c *ui.Context) {
+	copy := removalConfirmation(t.removePlan)
+	components.ConfirmationModal(c, &t.showRemove, "Remover jogo", t.removePlan.Message, copy.ConfirmLabel, copy.Danger, t.removeBusy, t.confirmRemoval, func() { t.showRemove = false })
+}
+
+func (t *GamesTab) confirmRemoval() {
+	if t.removeBusy || t.actions.remove == nil || t.removeTarget.ID == 0 {
+		return
+	}
+	t.removeBusy = true
+	go func() {
+		plan, err := t.actions.remove(context.Background(), t.removeTarget.ID)
+		t.runUpdate(func() {
+			t.removeBusy = false
+			if err != nil {
+				t.pageOK, t.pageMsg = false, "Não foi possível remover o jogo: "+err.Error()
+				return
+			}
+			t.showRemove, t.pageOK = false, true
+			if plan.Kind == models.RemovalDelete {
+				t.pageMsg = "Jogo excluído definitivamente."
+			} else {
+				t.pageMsg = "Jogo arquivado. Edite-o para reativar quando necessário."
+			}
+			t.loadGames()
+		})
+	}()
+}
+
+func (t *GamesTab) runUpdate(fn func()) {
+	if t.update != nil {
+		t.update(fn)
+		return
+	}
+	fn()
 }
