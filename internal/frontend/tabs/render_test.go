@@ -15,6 +15,7 @@ import (
 
 	"github.com/ardora/stockcontroller/internal/backend/models"
 	"github.com/ardora/stockcontroller/internal/frontend"
+	"github.com/ardora/stockcontroller/internal/frontend/components"
 	"github.com/ardora/stockcontroller/internal/frontend/style"
 )
 
@@ -46,6 +47,9 @@ func TestRepresentativeTabStatesRenderAtSupportedSizes(t *testing.T) {
 		"sales":          (&SalesTab{state: state, billQty: "1"}).View,
 		"sales_feedback": (&SalesTab{
 			state: state, billQty: "1", registerMsg: "Entrada registrada com sucesso.", registerOK: true, billMsg: "Informe um ID de produto válido.",
+		}).View,
+		"sales_empty_with_receipt": (&SalesTab{
+			state: state, billQty: "1", completed: []models.Visit{{ID: 2, ClientName: "Bia", CardNumber: 8, FinalTotalCents: 2500, ReceiptIdentifier: "REC-000002"}},
 		}).View,
 		"sales_checkout": (&SalesTab{
 			state: state, billQty: "1", showCheckout: true, discount: "R$ 5,00", payment: "Pix",
@@ -84,6 +88,43 @@ func TestRepresentativeTabStatesRenderAtSupportedSizes(t *testing.T) {
 					writeTabPreview(t, fmt.Sprintf("%s_dark=%t_%dx%d", name, dark, size[0], size[1]), image)
 				})
 			}
+		}
+	}
+}
+
+func TestSalesEmptyStateDoesNotOverlapReceipts(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		for _, size := range [][2]int{{1024, 768}, {800, 600}} {
+			name := fmt.Sprintf("dark=%t/%dx%d", dark, size[0], size[1])
+			t.Run(name, func(t *testing.T) {
+				var openHandle, emptyHandle, receiptsHandle ui.Handle
+				var openBounds, emptyBounds, receiptsBounds ui.Rect
+				tester := ui.NewTester(func(c *ui.Context) {
+					c.SetTheme(style.NewTheme(dark))
+					openBounds = openHandle.Bounds(c)
+					emptyBounds = emptyHandle.Bounds(c)
+					receiptsBounds = receiptsHandle.Bounds(c)
+					ui.Column(c).Fill().Padding(24).Children(func() {
+						components.Page(c, func() {
+							ui.Box(c).Height(250)
+							components.Panel(c, "Comandas abertas", "Valores de entrada são preservados desde o check-in.", 0, func() {
+								components.EmptyState(c, "Nenhuma comanda aberta", "Registre a entrada do primeiro cliente para começar.", nil).Bind(&emptyHandle)
+							}).Bind(&openHandle)
+							components.Panel(c, "Recibos recentes", "Consulte e reimprima uma comanda já fechada sem alterar seus valores.", 0, func() {
+								ui.Text(c, "REC-000002 · Bia")
+							}).Bind(&receiptsHandle)
+						})
+					})
+				}, size[0], size[1])
+				tester.Frame()
+				if emptyBounds.Y+emptyBounds.H > openBounds.Y+openBounds.H {
+					t.Fatalf("empty state escapes open-command panel: empty=%v open=%v", emptyBounds, openBounds)
+				}
+				if openBounds.Y+openBounds.H > receiptsBounds.Y {
+					t.Fatalf("open-command panel overlaps receipts: open=%v receipts=%v", openBounds, receiptsBounds)
+				}
+				writeTabPreview(t, "sales_empty_with_receipt_"+name, tester.Image())
+			})
 		}
 	}
 }

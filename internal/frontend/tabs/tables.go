@@ -78,7 +78,7 @@ func (t *TablesTab) View(c *ui.Context) {
 				}
 				ui.Field(c, "Nome ou número *", func() { ui.TextInput(c, &t.formName).Disabled(t.creating) })
 				components.FormActions(c, components.Action{Label: busyLabel(t.creating, "Criar mesa"), Disabled: t.creating, Run: t.createTable}, nil)
-			})
+			}).Grow(1)
 			components.Panel(c, "Adicionar cliente", "Apenas clientes com uma comanda aberta podem ser alocados.", 360, func() {
 				if t.assignMsg != "" {
 					components.FeedbackBanner(c, t.assignMsg, feedbackTone(t.assignOK))
@@ -86,7 +86,7 @@ func (t *TablesTab) View(c *ui.Context) {
 				ui.Field(c, "Mesa *", func() { ui.Select(c, &t.assignTable, t.tableOptions()).Disabled(t.assigning || t.loading) })
 				ui.Field(c, "Cliente *", func() { ui.Select(c, &t.assignClient, t.clientOptions()).Disabled(t.assigning || t.loading) })
 				components.FormActions(c, components.Action{Label: busyLabel(t.assigning, "Alocar cliente"), Disabled: t.assigning || t.loading, Run: t.assignClientToTable}, nil)
-			})
+			}).Grow(1)
 		})
 		switch {
 		case t.loading:

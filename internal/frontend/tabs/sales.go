@@ -99,7 +99,7 @@ func (t *SalesTab) View(c *ui.Context) {
 				ui.Field(c, "CPF ou documento", func() { ui.TextInput(c, &t.clientDocument).Disabled(t.registerBusy) })
 				ui.Field(c, "Cartão (0–999) *", func() { ui.TextInput(c, &t.clientCard).Disabled(t.registerBusy) })
 				components.FormActions(c, components.Action{Label: busyLabel(t.registerBusy, "Registrar entrada"), Disabled: t.registerBusy, Run: t.registerClient}, nil)
-			})
+			}).Grow(1)
 
 			components.Panel(c, "Lançar produto", "Selecione uma comanda aberta e um produto disponível.", 340, func() {
 				if t.billMsg != "" {
@@ -113,7 +113,7 @@ func (t *SalesTab) View(c *ui.Context) {
 				})
 				ui.Field(c, "Quantidade *", func() { ui.TextInput(c, &t.billQty).Disabled(t.billBusy) })
 				components.FormActions(c, components.Action{Label: busyLabel(t.billBusy, "Lançar na comanda"), Disabled: t.billBusy || t.loading, Run: t.billProductCharge}, nil)
-			})
+			}).Grow(1)
 		})
 
 		switch {
