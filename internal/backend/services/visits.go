@@ -21,15 +21,17 @@ func NewVisitService(db *sql.DB) *VisitService {
 	return &VisitService{db: db}
 }
 
-// OpenVisit creates or updates the customer and opens one visit atomically.
-func (s *VisitService) OpenVisit(ctx context.Context, name string, document *string, card int) (*models.Visit, error) {
+// OpenVisit creates or updates the customer and assigns one available code atomically.
+func (s *VisitService) OpenVisit(ctx context.Context, name string, document *string, codeValue string) (*models.Visit, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("client name is required")
 	}
-	if card < 0 || card > 999 {
-		return nil, fmt.Errorf("card must be between 0 and 999")
+	canonicalCode, err := NormalizeAccessCode(codeValue)
+	if err != nil {
+		return nil, err
 	}
+	card, _ := strconv.Atoi(canonicalCode)
 	if document != nil {
 		trimmed := strings.TrimSpace(*document)
 		if trimmed == "" {
@@ -45,10 +47,18 @@ func (s *VisitService) OpenVisit(ctx context.Context, name string, document *str
 	}
 	defer tx.Rollback()
 
-	var cardOwner int64
-	err = tx.QueryRowContext(ctx, "SELECT id FROM clients WHERE active_card = ?", card).Scan(&cardOwner)
+	var accessCodeID int64
+	err = tx.QueryRowContext(ctx, "SELECT id FROM access_codes WHERE value = ? AND active = 1", canonicalCode).Scan(&accessCodeID)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("command code %s is unavailable", canonicalCode)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var codeVisitID int64
+	err = tx.QueryRowContext(ctx, "SELECT id FROM visits WHERE access_code_id = ? AND closed_at IS NULL", accessCodeID).Scan(&codeVisitID)
 	if err == nil {
-		return nil, fmt.Errorf("card %d is already in use", card)
+		return nil, fmt.Errorf("command code %s is already in use", canonicalCode)
 	}
 	if err != sql.ErrNoRows {
 		return nil, err
@@ -80,9 +90,9 @@ func (s *VisitService) OpenVisit(ctx context.Context, name string, document *str
 	}
 
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO visits (client_id, client_name, client_document, card_number, entry_price_cents, opened_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		clientID, name, document, card, entryPrice, now,
+		INSERT INTO visits (client_id, client_name, client_document, card_number, access_code_id, entry_price_cents, opened_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		clientID, name, document, card, accessCodeID, entryPrice, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("open visit: %w", err)
@@ -147,17 +157,26 @@ func configuredEntryPrice(ctx context.Context, tx *sql.Tx) (int64, error) {
 
 // Get loads one visit by ID.
 func (s *VisitService) Get(ctx context.Context, id int64) (*models.Visit, error) {
-	return scanVisit(s.db.QueryRowContext(ctx, visitSelect+" WHERE id = ?", id))
+	return scanVisit(s.db.QueryRowContext(ctx, visitSelect+" WHERE v.id = ?", id))
 }
 
 // ActiveForClient returns the customer's current visit.
 func (s *VisitService) ActiveForClient(ctx context.Context, clientID int64) (*models.Visit, error) {
-	return scanVisit(s.db.QueryRowContext(ctx, visitSelect+" WHERE client_id = ? AND closed_at IS NULL", clientID))
+	return scanVisit(s.db.QueryRowContext(ctx, visitSelect+" WHERE v.client_id = ? AND v.closed_at IS NULL", clientID))
+}
+
+// ActiveForCode returns the open visit assigned to a canonical command code.
+func (s *VisitService) ActiveForCode(ctx context.Context, raw string) (*models.Visit, error) {
+	value, err := NormalizeAccessCode(raw)
+	if err != nil {
+		return nil, err
+	}
+	return scanVisit(s.db.QueryRowContext(ctx, visitSelect+" WHERE ac.value = ? AND v.closed_at IS NULL", value))
 }
 
 // ListActive returns every currently open visit.
 func (s *VisitService) ListActive(ctx context.Context) ([]models.Visit, error) {
-	return s.list(ctx, visitSelect+" WHERE closed_at IS NULL ORDER BY opened_at ASC")
+	return s.list(ctx, visitSelect+" WHERE v.closed_at IS NULL ORDER BY v.opened_at ASC")
 }
 
 // ListCompleted returns recently completed visits.
@@ -165,7 +184,7 @@ func (s *VisitService) ListCompleted(ctx context.Context, limit int) ([]models.V
 	if limit <= 0 {
 		limit = 50
 	}
-	return s.list(ctx, visitSelect+" WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT ?", limit)
+	return s.list(ctx, visitSelect+" WHERE v.closed_at IS NOT NULL ORDER BY v.closed_at DESC LIMIT ?", limit)
 }
 
 func (s *VisitService) list(ctx context.Context, query string, args ...any) ([]models.Visit, error) {
@@ -219,7 +238,7 @@ func (s *VisitService) Checkout(ctx context.Context, visitID, discountCents int6
 	}
 	defer tx.Rollback()
 
-	visit, err := scanVisit(tx.QueryRowContext(ctx, visitSelect+" WHERE id = ?", visitID))
+	visit, err := scanVisit(tx.QueryRowContext(ctx, visitSelect+" WHERE v.id = ?", visitID))
 	if err != nil {
 		return nil, err
 	}
@@ -268,16 +287,19 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-const visitSelect = `SELECT id, client_id, client_name, client_document, card_number,
-	entry_price_cents, consumption_subtotal_cents, gross_total_cents, discount_cents,
-	final_total_cents, payment_method, receipt_identifier, opened_at, closed_at, receipt_issued_at
-	FROM visits`
+const visitSelect = `SELECT v.id, v.client_id, v.client_name, v.client_document,
+	v.access_code_id, COALESCE(ac.value, printf('%03d', v.card_number)), v.card_number,
+	v.entry_price_cents, v.consumption_subtotal_cents, v.gross_total_cents, v.discount_cents,
+	v.final_total_cents, v.payment_method, v.receipt_identifier, v.opened_at, v.closed_at, v.receipt_issued_at
+	FROM visits v
+	LEFT JOIN access_codes ac ON ac.id = v.access_code_id`
 
 func scanVisit(row scanner) (*models.Visit, error) {
 	var visit models.Visit
 	var document, payment, receipt, opened, closed, issued sql.NullString
+	var accessCodeID sql.NullInt64
 	err := row.Scan(
-		&visit.ID, &visit.ClientID, &visit.ClientName, &document, &visit.CardNumber,
+		&visit.ID, &visit.ClientID, &visit.ClientName, &document, &accessCodeID, &visit.AccessCodeValue, &visit.CardNumber,
 		&visit.EntryPriceCents, &visit.ConsumptionSubtotalCents, &visit.GrossTotalCents,
 		&visit.DiscountCents, &visit.FinalTotalCents, &payment, &receipt, &opened, &closed, &issued,
 	)
@@ -287,6 +309,10 @@ func scanVisit(row scanner) (*models.Visit, error) {
 	if document.Valid {
 		value := document.String
 		visit.ClientDocument = &value
+	}
+	if accessCodeID.Valid {
+		value := accessCodeID.Int64
+		visit.AccessCodeID = &value
 	}
 	visit.PaymentMethod = models.PaymentMethod(payment.String)
 	visit.ReceiptIdentifier = receipt.String

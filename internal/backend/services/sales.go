@@ -19,9 +19,9 @@ func NewSalesService(db *sql.DB) *SalesService {
 	return &SalesService{db: db}
 }
 
-// RegisterClient creates or updates a client and assigns them an active card (0-999).
-func (s *SalesService) RegisterClient(ctx context.Context, name string, document *string, card int) (*models.Client, error) {
-	visit, err := NewVisitService(s.db).OpenVisit(ctx, name, document, card)
+// RegisterClient creates or updates a client and assigns an available command code.
+func (s *SalesService) RegisterClient(ctx context.Context, name string, document *string, codeValue string) (*models.Client, error) {
+	visit, err := NewVisitService(s.db).OpenVisit(ctx, name, document, codeValue)
 	if err != nil {
 		return nil, err
 	}
@@ -81,12 +81,54 @@ func (s *SalesService) BillProduct(ctx context.Context, clientID, productID int6
 		}
 		return err
 	}
+	if err := billProductTx(ctx, tx, visitID, clientID, productID, qty); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// BillProductByCode resolves one open visit and bills it atomically.
+func (s *SalesService) BillProductByCode(ctx context.Context, raw string, productID int64, qty int) (*models.Visit, error) {
+	if qty <= 0 {
+		return nil, fmt.Errorf("quantity must be greater than zero")
+	}
+	value, err := NormalizeAccessCode(raw)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var visitID, clientID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT v.id, v.client_id
+		FROM visits v
+		JOIN access_codes ac ON ac.id = v.access_code_id
+		WHERE ac.value = ? AND ac.active = 1 AND v.closed_at IS NULL`, value).Scan(&visitID, &clientID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("command code %s has no active visit", value)
+		}
+		return nil, err
+	}
+	if err := billProductTx(ctx, tx, visitID, clientID, productID, qty); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return NewVisitService(s.db).Get(ctx, visitID)
+}
+
+func billProductTx(ctx context.Context, tx *sql.Tx, visitID, clientID, productID int64, qty int) error {
 
 	// Get product details
 	var productName string
 	var priceCents int64
 	var stock int
-	err = tx.QueryRowContext(ctx, "SELECT name, price_cents, stock FROM products WHERE id = ? AND active = 1", productID).Scan(&productName, &priceCents, &stock)
+	err := tx.QueryRowContext(ctx, "SELECT name, price_cents, stock FROM products WHERE id = ? AND active = 1", productID).Scan(&productName, &priceCents, &stock)
 	if err != nil {
 		return fmt.Errorf("get product: %w", err)
 	}
@@ -113,7 +155,7 @@ func (s *SalesService) BillProduct(ctx context.Context, clientID, productID int6
 		return fmt.Errorf("update stock: %w", err)
 	}
 
-	return tx.Commit()
+	return nil
 }
 
 // Checkout removes the active card from the client, meaning they left.

@@ -13,7 +13,8 @@ import (
 func TestBackupIncludesVisitReceiptColumnsAndLegacyRows(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
-	visit, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, 6)
+	generateAccessCodes(t, db, 6)
+	visit, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, "006")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -256,8 +256,8 @@ func (t *SalesTab) registerClient() {
 		t.setRegisterError("Informe o nome do cliente.")
 		return
 	}
-	card, err := strconv.Atoi(cardText)
-	if err != nil || card < 0 || card > 999 {
+	codeValue, err := services.NormalizeAccessCode(cardText)
+	if err != nil {
 		t.setRegisterError("Informe um cartão válido entre 0 e 999.")
 		return
 	}
@@ -271,7 +271,7 @@ func (t *SalesTab) registerClient() {
 	t.registerBusy = true
 	t.registerMsg = ""
 	go func() {
-		visit, err := t.state.VisitService.OpenVisit(context.Background(), name, document, card)
+		visit, err := t.state.VisitService.OpenVisit(context.Background(), name, document, codeValue)
 		t.state.Window.Update(func() {
 			t.registerBusy = false
 			if err != nil {

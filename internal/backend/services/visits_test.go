@@ -35,20 +35,34 @@ func createProduct(t *testing.T, db *sql.DB, name string, price int64, stock int
 	return id
 }
 
+func generateAccessCodes(t *testing.T, db *sql.DB, quantity int) {
+	t.Helper()
+	if _, err := NewAccessCodeService(db).GenerateBatch(context.Background(), quantity); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVisitSnapshotsEntryAndConsumption(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
+	generateAccessCodes(t, db, 9)
 	config := NewConfigService(db)
 	if err := config.SetEntryPriceCents(ctx, 2500); err != nil {
 		t.Fatal(err)
 	}
 	visits := NewVisitService(db)
-	visit, err := visits.OpenVisit(ctx, "Ana", nil, 7)
+	visit, err := visits.OpenVisit(ctx, "Ana", nil, " 7 ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if visit.EntryPriceCents != 2500 {
 		t.Fatalf("entry = %d", visit.EntryPriceCents)
+	}
+	if visit.AccessCodeID == nil || visit.AccessCodeValue != "007" || visit.CardNumber != 7 {
+		t.Fatalf("visit access code = %+v", visit)
+	}
+	if active, err := visits.ActiveForCode(ctx, "7"); err != nil || active.ID != visit.ID {
+		t.Fatalf("ActiveForCode(7) = %+v, %v", active, err)
 	}
 	if err := config.SetEntryPriceCents(ctx, 3000); err != nil {
 		t.Fatal(err)
@@ -67,21 +81,22 @@ func TestVisitSnapshotsEntryAndConsumption(t *testing.T) {
 	if len(preview.Lines) != 1 || preview.Lines[0].Description != "Café <forte>" {
 		t.Fatalf("unexpected lines: %+v", preview.Lines)
 	}
-	if _, err := visits.OpenVisit(ctx, "Ana", nil, 8); err == nil {
+	if _, err := visits.OpenVisit(ctx, "Ana", nil, "008"); err == nil {
 		t.Fatal("expected duplicate active visit error")
 	}
-	if _, err := visits.OpenVisit(ctx, "Bia", nil, 7); err == nil {
+	if _, err := visits.OpenVisit(ctx, "Bia", nil, "007"); err == nil {
 		t.Fatal("expected card in use error")
 	}
 }
 
 func TestBillingRequiresVisitAndAvailableStock(t *testing.T) {
 	db := testDB(t)
+	generateAccessCodes(t, db, 1)
 	productID := createProduct(t, db, "Suco", 700, 1)
 	if err := NewSalesService(db).BillProduct(context.Background(), 999, productID, 1); err == nil {
 		t.Fatal("expected missing visit error")
 	}
-	visit, err := NewVisitService(db).OpenVisit(context.Background(), "Ana", nil, 1)
+	visit, err := NewVisitService(db).OpenVisit(context.Background(), "Ana", nil, "001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,14 +112,68 @@ func TestBillingRequiresVisitAndAvailableStock(t *testing.T) {
 	}
 }
 
+func TestBillProductByCodeChargesExactlyOneOpenVisit(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	generateAccessCodes(t, db, 3)
+	visit, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, "001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	productID := createProduct(t, db, "Suco", 700, 3)
+	sales := NewSalesService(db)
+
+	chargedVisit, err := sales.BillProductByCode(ctx, " 1\r\n", productID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chargedVisit.ID != visit.ID || chargedVisit.AccessCodeValue != "001" {
+		t.Fatalf("charged visit = %+v", chargedVisit)
+	}
+	var stock, rows int
+	if err := db.QueryRow("SELECT stock FROM products WHERE id = ?", productID).Scan(&stock); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM history WHERE visit_id = ? AND kind = 'sale'", visit.ID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if stock != 1 || rows != 1 {
+		t.Fatalf("after charge stock=%d sale rows=%d", stock, rows)
+	}
+
+	if _, err := sales.BillProductByCode(ctx, "002", productID, 1); err == nil {
+		t.Fatal("expected available code without visit to fail")
+	}
+	code2, err := NewAccessCodeService(db).Resolve(ctx, "002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAccessCodeService(db).Archive(ctx, code2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sales.BillProductByCode(ctx, "002", productID, 1); err == nil {
+		t.Fatal("expected archived code to fail")
+	}
+	if _, err := sales.BillProductByCode(ctx, "999", productID, 1); err == nil {
+		t.Fatal("expected unknown code to fail")
+	}
+	if err := db.QueryRow("SELECT stock FROM products WHERE id = ?", productID).Scan(&stock); err != nil {
+		t.Fatal(err)
+	}
+	if stock != 1 {
+		t.Fatalf("failed code lookup changed stock to %d", stock)
+	}
+}
+
 func TestCheckoutIsAtomicIdempotentAndHistoricallyStable(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
+	generateAccessCodes(t, db, 3)
 	if err := NewConfigService(db).SetEntryPriceCents(ctx, 1200); err != nil {
 		t.Fatal(err)
 	}
 	visits := NewVisitService(db)
-	visit, err := visits.OpenVisit(ctx, "Ana", nil, 3)
+	visit, err := visits.OpenVisit(ctx, "Ana", nil, "003")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,10 +206,11 @@ func TestCheckoutIsAtomicIdempotentAndHistoricallyStable(t *testing.T) {
 func TestDiscountBoundsAndEmptyConsumptionCheckout(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
+	generateAccessCodes(t, db, 9)
 	if err := NewConfigService(db).SetEntryPriceCents(ctx, 1000); err != nil {
 		t.Fatal(err)
 	}
-	visit, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, 9)
+	visit, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, "009")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,8 +232,9 @@ func TestDiscountBoundsAndEmptyConsumptionCheckout(t *testing.T) {
 func TestCheckoutRollsBackOnPersistenceFailure(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
+	generateAccessCodes(t, db, 4)
 	visits := NewVisitService(db)
-	visit, err := visits.OpenVisit(ctx, "Ana", nil, 4)
+	visit, err := visits.OpenVisit(ctx, "Ana", nil, "004")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +263,8 @@ func TestCheckoutRollsBackOnPersistenceFailure(t *testing.T) {
 func TestReceiptEscapesContentAndPrintFailureKeepsVisitClosed(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
-	visit, err := NewVisitService(db).OpenVisit(ctx, "<Ana>", nil, 5)
+	generateAccessCodes(t, db, 5)
+	visit, err := NewVisitService(db).OpenVisit(ctx, "<Ana>", nil, "005")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,5 +302,38 @@ func TestReceiptEscapesContentAndPrintFailureKeepsVisitClosed(t *testing.T) {
 	stored, err := NewVisitService(db).Get(ctx, visit.ID)
 	if err != nil || stored.ClosedAt == nil {
 		t.Fatal("print failure changed visit state")
+	}
+}
+
+func TestVisitOpenRollbackKeepsCodeAvailable(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	generateAccessCodes(t, db, 1)
+	if _, err := db.Exec(`
+		CREATE TRIGGER fail_entry_history BEFORE INSERT ON history
+		WHEN NEW.kind = 'entry'
+		BEGIN SELECT RAISE(ABORT, 'forced entry failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, "001"); err == nil {
+		t.Fatal("expected open visit failure")
+	}
+	code, err := NewAccessCodeService(db).ResolveAvailable(ctx, "001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code.State != models.AccessCodeAvailable {
+		t.Fatalf("code after rollback = %+v", code)
+	}
+	var clients, visits int
+	if err := db.QueryRow("SELECT COUNT(*) FROM clients").Scan(&clients); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM visits").Scan(&visits); err != nil {
+		t.Fatal(err)
+	}
+	if clients != 0 || visits != 0 {
+		t.Fatalf("rollback left clients=%d visits=%d", clients, visits)
 	}
 }
