@@ -49,6 +49,21 @@ type Table struct {
 	CreatedAt time.Time
 }
 
+// RemovalKind describes the safe action available for a catalog record.
+type RemovalKind string
+
+const (
+	RemovalDelete  RemovalKind = "delete"
+	RemovalArchive RemovalKind = "archive"
+	RemovalBlocked RemovalKind = "blocked"
+)
+
+// RemovalPlan explains whether a record can be deleted, archived, or is in use.
+type RemovalPlan struct {
+	Kind    RemovalKind
+	Message string
+}
+
 // AccessCodeState is the operational state derived for a reusable code.
 type AccessCodeState string
 

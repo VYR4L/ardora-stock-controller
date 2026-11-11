@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ardora/stockcontroller/internal/backend/database"
+	"github.com/ardora/stockcontroller/internal/backend/models"
 )
 
 func createTableAndGame(t *testing.T, db *sql.DB) (int64, int64) {
@@ -47,6 +48,14 @@ func TestTableGameCatalogBroughtSwitchAndStop(t *testing.T) {
 	current, err := service.Current(ctx, tableID)
 	if err != nil || current.GameID == nil {
 		t.Fatalf("catalog session: %+v %v", current, err)
+	}
+	originalSessionID := current.ID
+	if err := NewGameService(db).Update(ctx, &models.Game{ID: gameID, Name: "Catan: Nova edição", MinPlayers: 1, MaxPlayers: 4, Active: true}); err != nil {
+		t.Fatal(err)
+	}
+	current, err = service.Current(ctx, tableID)
+	if err != nil || current.ID != originalSessionID || current.GameID == nil || *current.GameID != gameID || current.GameName != "Catan: Nova edição" {
+		t.Fatalf("renamed catalog session: %+v %v", current, err)
 	}
 	if err := service.StartBrought(ctx, tableID, "Azul do João", &visit.ClientID); err != nil {
 		t.Fatal(err)
