@@ -15,13 +15,17 @@ import (
 )
 
 type TablesTab struct {
-	state *frontend.State
+	state   *frontend.State
+	actions tableActions
+	update  func(func())
 
 	loading   bool
 	overviews []models.TableOverview
 	games     []models.Game
 	visits    []models.Visit
 	err       error
+	pageMsg   string
+	pageOK    bool
 
 	formName  string
 	createMsg string
@@ -38,10 +42,34 @@ type TablesTab struct {
 	broughtGame, broughtOwner string
 	gameMsg                   string
 	gameBusy                  bool
+
+	showEdit  bool
+	editTable models.Table
+	editMsg   string
+	editBusy  bool
+
+	showRemove   bool
+	removeTarget models.Table
+	removePlan   models.RemovalPlan
+	removeBusy   bool
+}
+
+type tableActions struct {
+	update      func(context.Context, *models.Table) error
+	planRemoval func(context.Context, int64) (models.RemovalPlan, error)
+	remove      func(context.Context, int64) (models.RemovalPlan, error)
 }
 
 func NewTablesTab(s *frontend.State) *TablesTab {
 	t := &TablesTab{state: s, gameSource: "Catálogo da luderia", selectedGame: "Selecione...", broughtOwner: "Não informado"}
+	if s != nil {
+		if s.TableService != nil {
+			t.actions = tableActions{update: s.TableService.Update, planRemoval: s.TableService.PlanRemoval, remove: s.TableService.Remove}
+		}
+		if s.Window != nil {
+			t.update = s.Window.Update
+		}
+	}
 	t.Refresh()
 	return t
 }
@@ -71,6 +99,9 @@ func (t *TablesTab) Refresh() {
 func (t *TablesTab) View(c *ui.Context) {
 	components.Page(c, func() {
 		components.PageHeader(c, "SALÃO", "Mesas", "Veja quem está jogando, use o catálogo ou registre um jogo trazido pelo cliente.", nil)
+		if t.pageMsg != "" {
+			components.FeedbackBanner(c, t.pageMsg, feedbackTone(t.pageOK))
+		}
 		ui.Row(c).Gap(16).Wrap().AlignItems(ui.Start).Children(func() {
 			components.Panel(c, "Nova mesa", "Crie uma mesa usando o nome ou número visto pela equipe.", 270, func() {
 				if t.createMsg != "" {
@@ -78,7 +109,7 @@ func (t *TablesTab) View(c *ui.Context) {
 				}
 				ui.Field(c, "Nome ou número *", func() { ui.TextInput(c, &t.formName).Disabled(t.creating) })
 				components.FormActions(c, components.Action{Label: busyLabel(t.creating, "Criar mesa"), Disabled: t.creating, Run: t.createTable}, nil)
-			})
+			}).Grow(1)
 			components.Panel(c, "Adicionar cliente", "Apenas clientes com uma comanda aberta podem ser alocados.", 360, func() {
 				if t.assignMsg != "" {
 					components.FeedbackBanner(c, t.assignMsg, feedbackTone(t.assignOK))
@@ -86,7 +117,7 @@ func (t *TablesTab) View(c *ui.Context) {
 				ui.Field(c, "Mesa *", func() { ui.Select(c, &t.assignTable, t.tableOptions()).Disabled(t.assigning || t.loading) })
 				ui.Field(c, "Cliente *", func() { ui.Select(c, &t.assignClient, t.clientOptions()).Disabled(t.assigning || t.loading) })
 				components.FormActions(c, components.Action{Label: busyLabel(t.assigning, "Alocar cliente"), Disabled: t.assigning || t.loading, Run: t.assignClientToTable}, nil)
-			})
+			}).Grow(1)
 		})
 		switch {
 		case t.loading:
@@ -96,7 +127,7 @@ func (t *TablesTab) View(c *ui.Context) {
 		case len(t.overviews) == 0:
 			components.EmptyState(c, "Nenhuma mesa cadastrada", "Crie a primeira mesa para montar a visão do salão.", nil)
 		default:
-			components.Panel(c, "Visão do salão", "Cada cartão reúne clientes e o jogo atual da mesa.", 0, func() {
+			components.Panel(c, "Visão do salão", "Cada comanda reúne clientes e o jogo atual da mesa.", 0, func() {
 				ui.Row(c).Gap(12).Wrap().AlignItems(ui.Start).Children(func() {
 					for _, overview := range t.overviews {
 						t.renderTable(c, overview)
@@ -107,6 +138,10 @@ func (t *TablesTab) View(c *ui.Context) {
 		if t.showGameModal {
 			t.renderGameModal(c)
 		}
+		if t.showEdit {
+			t.renderEditModal(c)
+		}
+		t.renderRemoveModal(c)
 	})
 }
 
@@ -144,12 +179,14 @@ func (t *TablesTab) renderTable(c *ui.Context, overview models.TableOverview) {
 			for _, client := range overview.Clients {
 				label := client.Name
 				if client.ActiveCard != nil {
-					label = fmt.Sprintf("Cartão %03d · %s", *client.ActiveCard, client.Name)
+					label = fmt.Sprintf("Comanda %03d · %s", *client.ActiveCard, client.Name)
 				}
 				ui.Text(c, label).FontSize(12).TextColor(tokens.Text)
 			}
 		})
-		if overview.CurrentGame != nil {
+		if !overview.Table.Active {
+			components.StatusBadge(c, "Inativa", components.ToneNeutral)
+		} else if overview.CurrentGame != nil {
 			components.StatusBadge(c, "Em jogo", components.ToneAccent)
 		} else if len(overview.Clients) > 0 {
 			components.StatusBadge(c, "Aguardando jogo", components.ToneWarning)
@@ -157,7 +194,13 @@ func (t *TablesTab) renderTable(c *ui.Context, overview models.TableOverview) {
 			components.StatusBadge(c, "Disponível", components.ToneSuccess)
 		}
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if ui.Button(c, "Definir jogo").Disabled(len(overview.Clients) == 0 || t.gameBusy).Clicked() {
+			if ui.Button(c, "Editar mesa").Clicked() {
+				t.openTableEdit(overview.Table)
+			}
+			if ui.Button(c, "Excluir").Clicked() {
+				t.requestTableRemoval(overview.Table)
+			}
+			if ui.Button(c, "Definir jogo").Disabled(!overview.Table.Active || len(overview.Clients) == 0 || t.gameBusy).Clicked() {
 				t.openGameModal(overview.Table.ID)
 			}
 			if overview.CurrentGame != nil && ui.Button(c, "Encerrar jogo").Disabled(t.gameBusy).Clicked() {
@@ -165,6 +208,114 @@ func (t *TablesTab) renderTable(c *ui.Context, overview models.TableOverview) {
 			}
 		})
 	})
+}
+
+func (t *TablesTab) openTableEdit(table models.Table) {
+	t.editTable = table
+	t.editMsg = ""
+	t.showEdit = true
+}
+
+func (t *TablesTab) renderEditModal(c *ui.Context) {
+	ui.Modal(c, &t.showEdit, func() {
+		ui.Column(c).Gap(16).Width(520).MaxWidthPercent(90).Padding(8).Children(func() {
+			components.SectionHeader(c, "Editar mesa", "Atualize o nome da mesa ou reative seu cadastro.")
+			if t.editMsg != "" {
+				components.FeedbackBanner(c, t.editMsg, components.ToneDanger)
+			}
+			ui.Field(c, "Nome ou número *", func() { ui.TextInput(c, &t.editTable.Name).Disabled(t.editBusy) })
+			ui.Checkbox(c, &t.editTable.Active, "Ativa").Disabled(t.editBusy)
+			components.FormActions(c, components.Action{Label: busyLabel(t.editBusy, "Salvar mesa"), Disabled: t.editBusy, Run: t.saveTableEdit}, &components.Action{Label: "Cancelar", Disabled: t.editBusy, Run: func() { t.showEdit = false }})
+		})
+	})
+}
+
+func (t *TablesTab) saveTableEdit() {
+	if strings.TrimSpace(t.editTable.Name) == "" {
+		t.editMsg = "Informe o nome ou número da mesa."
+		return
+	}
+	if t.editBusy || t.actions.update == nil {
+		return
+	}
+	t.editBusy, t.editMsg = true, ""
+	table := t.editTable
+	go func() {
+		err := t.actions.update(context.Background(), &table)
+		t.runTableUpdate(func() {
+			t.editBusy = false
+			if err != nil {
+				t.editMsg = "Não foi possível atualizar a mesa: " + err.Error()
+				return
+			}
+			t.showEdit, t.pageOK, t.pageMsg = false, true, "Mesa atualizada com sucesso."
+			t.Refresh()
+		})
+	}()
+}
+
+func (t *TablesTab) requestTableRemoval(table models.Table) {
+	if t.removeBusy || t.actions.planRemoval == nil {
+		return
+	}
+	t.removeBusy, t.pageMsg = true, ""
+	go func() {
+		plan, err := t.actions.planRemoval(context.Background(), table.ID)
+		t.runTableUpdate(func() {
+			t.removeBusy = false
+			if err != nil {
+				t.pageOK, t.pageMsg = false, "Não foi possível verificar a mesa: "+err.Error()
+				return
+			}
+			if plan.Kind == models.RemovalBlocked {
+				t.pageOK, t.pageMsg, t.showRemove = false, plan.Message, false
+				return
+			}
+			t.removeTarget, t.removePlan, t.showRemove = table, plan, true
+		})
+	}()
+}
+
+func (t *TablesTab) renderRemoveModal(c *ui.Context) {
+	copy := removalConfirmation(t.removePlan)
+	components.ConfirmationModal(c, &t.showRemove, "Remover mesa", t.removePlan.Message, copy.ConfirmLabel, copy.Danger, t.removeBusy, t.confirmTableRemoval, func() { t.showRemove = false })
+}
+
+func (t *TablesTab) confirmTableRemoval() {
+	if t.removeBusy || t.actions.remove == nil || t.removeTarget.ID == 0 {
+		return
+	}
+	t.removeBusy = true
+	go func() {
+		plan, err := t.actions.remove(context.Background(), t.removeTarget.ID)
+		t.runTableUpdate(func() {
+			t.removeBusy = false
+			if err != nil {
+				t.pageOK = false
+				if plan.Kind == models.RemovalBlocked {
+					t.showRemove, t.pageMsg = false, plan.Message
+				} else {
+					t.pageMsg = "Não foi possível remover a mesa: " + err.Error()
+				}
+				return
+			}
+			t.showRemove, t.pageOK = false, true
+			if plan.Kind == models.RemovalDelete {
+				t.pageMsg = "Mesa excluída definitivamente."
+			} else {
+				t.pageMsg = "Mesa arquivada. Edite-a para reativar quando necessário."
+			}
+			t.Refresh()
+		})
+	}()
+}
+
+func (t *TablesTab) runTableUpdate(fn func()) {
+	if t.update != nil {
+		t.update(fn)
+		return
+	}
+	fn()
 }
 
 func (t *TablesTab) renderGameModal(c *ui.Context) {
@@ -336,7 +487,7 @@ func (t *TablesTab) normalizeSelections() {
 
 func tableOption(table models.Table) string { return fmt.Sprintf("%s (#%d)", table.Name, table.ID) }
 func clientVisitOption(visit models.Visit) string {
-	return fmt.Sprintf("Cartão %03d · %s (#%d)", visit.CardNumber, visit.ClientName, visit.ClientID)
+	return fmt.Sprintf("%s · %s (#%d)", visitCodeLabel(visit), visit.ClientName, visit.ClientID)
 }
 func gameOption(game models.Game) string      { return fmt.Sprintf("%s (#%d)", game.Name, game.ID) }
 func ownerOption(client models.Client) string { return fmt.Sprintf("%s (#%d)", client.Name, client.ID) }

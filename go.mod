@@ -3,6 +3,7 @@ module github.com/ardora/stockcontroller
 go 1.27.1
 
 require (
+	github.com/boombuler/barcode v1.0.2
 	github.com/egoist/mygo v0.3.7
 	github.com/google/uuid v1.6.0
 	modernc.org/sqlite v1.60.1

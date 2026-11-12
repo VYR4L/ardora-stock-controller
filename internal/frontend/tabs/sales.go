@@ -15,8 +15,17 @@ import (
 	"github.com/ardora/stockcontroller/internal/frontend/style"
 )
 
+type salesActions struct {
+	resolveAvailable  func(context.Context, string) (*models.AccessCode, error)
+	openVisit         func(context.Context, string, *string, string) (*models.Visit, error)
+	billProductByCode func(context.Context, string, int64, int) (*models.Visit, error)
+	activeForCode     func(context.Context, string) (*models.Visit, error)
+}
+
 type SalesTab struct {
-	state *frontend.State
+	state   *frontend.State
+	actions salesActions
+	update  func(func())
 
 	clientName     string
 	clientDocument string
@@ -25,18 +34,22 @@ type SalesTab struct {
 	registerOK     bool
 	registerBusy   bool
 
-	loading   bool
-	loadErr   error
-	active    []models.Visit
-	products  []models.Product
-	completed []models.Visit
+	loading        bool
+	loadErr        error
+	active         []models.Visit
+	products       []models.Product
+	completed      []models.Visit
+	availableCodes []models.AccessCode
+	availableCode  string
 
-	billVisit   string
-	billProduct string
-	billQty     string
-	billMsg     string
-	billOK      bool
-	billBusy    bool
+	billVisit     string
+	billProduct   string
+	billProductID int64
+	billQty       string
+	billCode      string
+	billMsg       string
+	billOK        bool
+	billBusy      bool
 
 	showCheckout    bool
 	checkoutVisitID int64
@@ -52,10 +65,28 @@ type SalesTab struct {
 	printing    bool
 
 	completedVisit string
+	checkoutCode   string
+	lookupMsg      string
+	lookupBusy     bool
 }
 
 func NewSalesTab(s *frontend.State) *SalesTab {
-	t := &SalesTab{state: s, billQty: "1", discount: "R$ 0,00", payment: "Selecione..."}
+	t := &SalesTab{state: s, billQty: "1", discount: "R$ 0,00", payment: "Selecione...", availableCode: "Selecione..."}
+	if s != nil {
+		if s.AccessCodeService != nil {
+			t.actions.resolveAvailable = s.AccessCodeService.ResolveAvailable
+		}
+		if s.VisitService != nil {
+			t.actions.openVisit = s.VisitService.OpenVisit
+			t.actions.activeForCode = s.VisitService.ActiveForCode
+		}
+		if s.SalesService != nil {
+			t.actions.billProductByCode = s.SalesService.BillProductByCode
+		}
+		if s.Window != nil {
+			t.update = s.Window.Update
+		}
+	}
 	t.Refresh()
 	return t
 }
@@ -69,16 +100,21 @@ func (t *SalesTab) Refresh() {
 		active, err := t.state.VisitService.ListActive(context.Background())
 		products, productsErr := t.state.ProductService.List(context.Background(), true)
 		completed, completedErr := t.state.VisitService.ListCompleted(context.Background(), 25)
+		codes, codesErr := t.state.AccessCodeService.ListCodes(context.Background(), "")
 		if err == nil {
 			err = productsErr
 		}
 		if err == nil {
 			err = completedErr
 		}
+		if err == nil {
+			err = codesErr
+		}
 		t.state.Window.Update(func() {
 			t.active = active
 			t.products = products
 			t.completed = completed
+			t.availableCodes = availableAccessCodes(codes)
 			t.loadErr = err
 			t.loading = false
 			t.normalizeSelections()
@@ -91,29 +127,34 @@ func (t *SalesTab) View(c *ui.Context) {
 		components.PageHeader(c, "ATENDIMENTO", "Vendas e comandas", "Registre entradas, lance produtos e feche a conta do cliente em um único fluxo.", nil)
 
 		ui.Row(c).Gap(16).Wrap().AlignItems(ui.Start).Children(func() {
-			components.Panel(c, "Registrar entrada", "Identifique o cliente e associe um cartão disponível.", 300, func() {
+			components.Panel(c, "Registrar entrada", "Identifique o cliente e associe uma comanda disponível.", 300, func() {
 				if t.registerMsg != "" {
 					components.FeedbackBanner(c, t.registerMsg, feedbackTone(t.registerOK))
 				}
 				ui.Field(c, "Nome *", func() { ui.TextInput(c, &t.clientName).Disabled(t.registerBusy) })
 				ui.Field(c, "CPF ou documento", func() { ui.TextInput(c, &t.clientDocument).Disabled(t.registerBusy) })
-				ui.Field(c, "Cartão (0–999) *", func() { ui.TextInput(c, &t.clientCard).Disabled(t.registerBusy) })
+				ui.Field(c, "Código da comanda *", func() {
+					ui.TextInput(c, &t.clientCard).Disabled(t.registerBusy).OnSubmit(t.validateRegistrationCode)
+				})
+				ui.Field(c, "Ou selecione uma disponível", func() {
+					ui.Select(c, &t.availableCode, t.availableCodeOptions()).Disabled(t.registerBusy || t.loading).OnChange(t.selectAvailableCode)
+				})
 				components.FormActions(c, components.Action{Label: busyLabel(t.registerBusy, "Registrar entrada"), Disabled: t.registerBusy, Run: t.registerClient}, nil)
-			})
+			}).Grow(1)
 
-			components.Panel(c, "Lançar produto", "Selecione uma comanda aberta e um produto disponível.", 340, func() {
+			components.Panel(c, "Lançar produto", "Selecione o produto e leia ou digite o código da comanda.", 340, func() {
 				if t.billMsg != "" {
 					components.FeedbackBanner(c, t.billMsg, feedbackTone(t.billOK))
 				}
-				ui.Field(c, "Cliente / comanda *", func() {
-					ui.Select(c, &t.billVisit, t.activeOptions()).Disabled(t.billBusy || t.loading)
-				})
 				ui.Field(c, "Produto *", func() {
-					ui.Select(c, &t.billProduct, t.productOptions()).Disabled(t.billBusy || t.loading)
+					ui.Select(c, &t.billProduct, t.productOptions()).Disabled(t.billBusy || t.loading).OnChange(t.selectBillProduct)
 				})
 				ui.Field(c, "Quantidade *", func() { ui.TextInput(c, &t.billQty).Disabled(t.billBusy) })
-				components.FormActions(c, components.Action{Label: busyLabel(t.billBusy, "Lançar na comanda"), Disabled: t.billBusy || t.loading, Run: t.billProductCharge}, nil)
-			})
+				ui.Field(c, "Código da comanda *", func() {
+					ui.TextInput(c, &t.billCode).Disabled(t.billBusy).OnSubmit(t.billScannedCode)
+				})
+				components.FormActions(c, components.Action{Label: busyLabel(t.billBusy, "Lançar na comanda"), Disabled: t.billBusy || t.loading, Run: t.billScannedCode}, nil)
+			}).Grow(1)
 		})
 
 		switch {
@@ -137,6 +178,17 @@ func (t *SalesTab) View(c *ui.Context) {
 
 func (t *SalesTab) renderActiveVisits(c *ui.Context) {
 	components.Panel(c, "Comandas abertas", "Valores de entrada são preservados desde o check-in.", 0, func() {
+		if t.lookupMsg != "" {
+			components.FeedbackBanner(c, t.lookupMsg, feedbackTone(false))
+		}
+		ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+			ui.Field(c, "Localizar comanda por código", func() {
+				ui.TextInput(c, &t.checkoutCode).Disabled(t.lookupBusy).OnSubmit(t.locateCheckoutCode)
+			}).MinWidth(280).Grow(1)
+			if ui.Button(c, busyLabel(t.lookupBusy, "Localizar comanda")).Disabled(t.lookupBusy).Clicked() {
+				t.locateCheckoutCode()
+			}
+		})
 		if len(t.active) == 0 {
 			components.EmptyState(c, "Nenhuma comanda aberta", "Registre a entrada do primeiro cliente para começar.", nil)
 			return
@@ -145,7 +197,7 @@ func (t *SalesTab) renderActiveVisits(c *ui.Context) {
 			visit := visit
 			ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Padding(10, 0).BorderWidth(0, 0, 0, 1).BorderColor(style.FromContext(c).Border).Children(func() {
 				ui.Column(c).Gap(2).Grow(1).MinWidth(220).Children(func() {
-					ui.Textf(c, "Cartão %03d · %s", visit.CardNumber, visit.ClientName).FontWeight(700)
+					ui.Textf(c, "%s · %s", visitCodeLabel(visit), visit.ClientName).FontWeight(700)
 					ui.Textf(c, "Entrada %s · desde %s", services.FormatBRLCents(visit.EntryPriceCents), visit.OpenedAt.Format("02/01 15:04")).FontSize(12).TextColor(style.FromContext(c).Muted)
 				})
 				components.StatusBadge(c, "Aberta", components.ToneAccent)
@@ -233,7 +285,7 @@ func (t *SalesTab) renderReceiptModal(c *ui.Context) {
 func (t *SalesTab) renderSummary(c *ui.Context, summary *models.CheckoutSummary) {
 	visit := summary.Visit
 	ui.Column(c).Gap(6).Children(func() {
-		ui.Textf(c, "%s · Cartão %03d", visit.ClientName, visit.CardNumber).FontSize(17).FontWeight(750)
+		ui.Textf(c, "%s · %s", visit.ClientName, visitCodeLabel(visit)).FontSize(17).FontWeight(750)
 		ui.Textf(c, "Entrada: %s", services.FormatBRLCents(visit.EntryPriceCents))
 		for _, line := range summary.Lines {
 			line := line
@@ -256,9 +308,13 @@ func (t *SalesTab) registerClient() {
 		t.setRegisterError("Informe o nome do cliente.")
 		return
 	}
-	card, err := strconv.Atoi(cardText)
-	if err != nil || card < 0 || card > 999 {
-		t.setRegisterError("Informe um cartão válido entre 0 e 999.")
+	codeValue, err := services.NormalizeAccessCode(cardText)
+	if err != nil {
+		t.setRegisterError("Informe um código de comanda válido.")
+		return
+	}
+	if t.actions.openVisit == nil {
+		t.setRegisterError("O cadastro de comandas não está disponível.")
 		return
 	}
 	if t.registerBusy {
@@ -271,8 +327,8 @@ func (t *SalesTab) registerClient() {
 	t.registerBusy = true
 	t.registerMsg = ""
 	go func() {
-		visit, err := t.state.VisitService.OpenVisit(context.Background(), name, document, card)
-		t.state.Window.Update(func() {
+		visit, err := t.actions.openVisit(context.Background(), name, document, codeValue)
+		t.runUpdate(func() {
 			t.registerBusy = false
 			if err != nil {
 				t.setRegisterError("Não foi possível registrar a entrada: " + err.Error())
@@ -280,41 +336,100 @@ func (t *SalesTab) registerClient() {
 			}
 			t.registerOK = true
 			t.registerMsg = fmt.Sprintf("Entrada registrada. Valor desta comanda: %s.", services.FormatBRLCents(visit.EntryPriceCents))
-			t.clientName, t.clientDocument, t.clientCard = "", "", ""
+			t.clientName, t.clientDocument, t.clientCard, t.availableCode = "", "", "", "Selecione..."
 			t.Refresh()
 		})
 	}()
 }
 
-func (t *SalesTab) billProductCharge() {
-	visitID := t.visitIDForOption(t.billVisit)
-	productID := t.productIDForOption(t.billProduct)
+func (t *SalesTab) validateRegistrationCode() {
+	if t.registerBusy {
+		return
+	}
+	if t.actions.resolveAvailable == nil {
+		t.setRegisterError("A validação de comandas não está disponível.")
+		return
+	}
+	raw := strings.TrimSpace(t.clientCard)
+	if raw == "" {
+		t.setRegisterError("Informe ou leia o código da comanda.")
+		return
+	}
+	t.registerBusy, t.registerMsg = true, ""
+	go func() {
+		code, err := t.actions.resolveAvailable(context.Background(), raw)
+		t.runUpdate(func() {
+			t.registerBusy = false
+			if err != nil {
+				t.setRegisterError("Não foi possível validar a comanda: " + err.Error())
+				return
+			}
+			t.clientCard = code.Value
+			t.availableCode = availableCodeOption(*code)
+			t.registerOK = true
+			t.registerMsg = fmt.Sprintf("Comanda %s disponível.", code.Value)
+		})
+	}()
+}
+
+func (t *SalesTab) billProductCharge() { t.billScannedCode() }
+
+func (t *SalesTab) billScannedCode() {
+	productID := t.selectedProductID()
 	quantity, err := strconv.Atoi(strings.TrimSpace(t.billQty))
-	if visitID == 0 || productID == 0 || err != nil || quantity <= 0 {
-		t.setBillError("Selecione cliente e produto e informe uma quantidade válida.")
+	code := strings.TrimSpace(t.billCode)
+	if productID == 0 || err != nil || quantity <= 0 || code == "" {
+		t.setBillError("Selecione o produto, informe uma quantidade válida e leia o código da comanda.")
 		return
 	}
 	if t.billBusy {
 		return
 	}
-	t.billBusy, t.billMsg = true, ""
-	clientID := int64(0)
-	for _, visit := range t.active {
-		if visit.ID == visitID {
-			clientID = visit.ClientID
-			break
-		}
+	if t.actions.billProductByCode == nil {
+		t.setBillError("O lançamento por código não está disponível.")
+		return
 	}
+	t.billBusy, t.billMsg = true, ""
 	go func() {
-		err := t.state.SalesService.BillProduct(context.Background(), clientID, productID, quantity)
-		t.state.Window.Update(func() {
+		visit, err := t.actions.billProductByCode(context.Background(), code, productID, quantity)
+		t.runUpdate(func() {
 			t.billBusy = false
 			if err != nil {
 				t.setBillError("Não foi possível lançar o produto: " + err.Error())
 				return
 			}
-			t.billOK, t.billMsg, t.billQty = true, "Produto lançado na comanda.", "1"
+			t.billOK = true
+			t.billMsg = fmt.Sprintf("Produto lançado na comanda %s.", visitCodeLabel(*visit))
+			t.billCode = ""
 			t.Refresh()
+		})
+	}()
+}
+
+func (t *SalesTab) locateCheckoutCode() {
+	if t.lookupBusy {
+		return
+	}
+	if t.actions.activeForCode == nil {
+		t.lookupMsg = "A busca de comandas não está disponível."
+		return
+	}
+	raw := strings.TrimSpace(t.checkoutCode)
+	if raw == "" {
+		t.lookupMsg = "Informe ou leia o código da comanda."
+		return
+	}
+	t.lookupBusy, t.lookupMsg = true, ""
+	go func() {
+		visit, err := t.actions.activeForCode(context.Background(), raw)
+		t.runUpdate(func() {
+			t.lookupBusy = false
+			if err != nil {
+				t.lookupMsg = "Não foi possível localizar a comanda: " + err.Error()
+				return
+			}
+			t.checkoutCode = ""
+			t.openCheckout(visit.ID)
 		})
 	}()
 }
@@ -326,7 +441,9 @@ func (t *SalesTab) openCheckout(visitID int64) {
 	t.checkoutMsg = ""
 	t.preview = nil
 	t.showCheckout = true
-	t.loadCheckoutPreview()
+	if t.state != nil && t.state.VisitService != nil && t.state.Window != nil {
+		t.loadCheckoutPreview()
+	}
 }
 
 func (t *SalesTab) loadCheckoutPreview() {
@@ -450,16 +567,28 @@ func (t *SalesTab) normalizeSelections() {
 	if t.visitIDForOption(t.billVisit) == 0 {
 		t.billVisit = "Selecione..."
 	}
-	if t.productIDForOption(t.billProduct) == 0 {
+	if t.billProductID == 0 {
+		t.billProductID = t.productIDForOption(t.billProduct)
+	}
+	if t.billProductID != 0 {
+		if product, ok := t.productForID(t.billProductID); ok {
+			t.billProduct = productOption(product)
+		} else {
+			t.billProductID, t.billProduct = 0, "Selecione..."
+		}
+	} else {
 		t.billProduct = "Selecione..."
 	}
 	if t.completedIDForOption(t.completedVisit) == 0 {
 		t.completedVisit = "Selecione..."
 	}
+	if t.accessCodeForOption(t.availableCode) == "" {
+		t.availableCode = "Selecione..."
+	}
 }
 
 func visitOption(visit models.Visit) string {
-	return fmt.Sprintf("Cartão %03d · %s (#%d)", visit.CardNumber, visit.ClientName, visit.ID)
+	return fmt.Sprintf("%s · %s (#%d)", visitCodeLabel(visit), visit.ClientName, visit.ID)
 }
 
 func productOption(product models.Product) string {
@@ -488,6 +617,27 @@ func (t *SalesTab) productIDForOption(option string) int64 {
 	return 0
 }
 
+func (t *SalesTab) productForID(id int64) (models.Product, bool) {
+	for _, product := range t.products {
+		if product.ID == id {
+			return product, true
+		}
+	}
+	return models.Product{}, false
+}
+
+func (t *SalesTab) selectBillProduct() {
+	t.billProductID = t.productIDForOption(t.billProduct)
+}
+
+func (t *SalesTab) selectedProductID() int64 {
+	if _, ok := t.productForID(t.billProductID); ok {
+		return t.billProductID
+	}
+	t.selectBillProduct()
+	return t.billProductID
+}
+
 func (t *SalesTab) completedIDForOption(option string) int64 {
 	for _, visit := range t.completed {
 		if completedOption(visit) == option {
@@ -495,6 +645,57 @@ func (t *SalesTab) completedIDForOption(option string) int64 {
 		}
 	}
 	return 0
+}
+
+func availableAccessCodes(codes []models.AccessCode) []models.AccessCode {
+	available := make([]models.AccessCode, 0, len(codes))
+	for _, code := range codes {
+		if code.State == models.AccessCodeAvailable {
+			available = append(available, code)
+		}
+	}
+	return available
+}
+
+func availableCodeOption(code models.AccessCode) string { return "Comanda " + code.Value }
+
+func (t *SalesTab) availableCodeOptions() []string {
+	options := []string{"Selecione..."}
+	for _, code := range t.availableCodes {
+		options = append(options, availableCodeOption(code))
+	}
+	return options
+}
+
+func (t *SalesTab) accessCodeForOption(option string) string {
+	for _, code := range t.availableCodes {
+		if availableCodeOption(code) == option {
+			return code.Value
+		}
+	}
+	return ""
+}
+
+func (t *SalesTab) selectAvailableCode() {
+	if code := t.accessCodeForOption(t.availableCode); code != "" {
+		t.clientCard = code
+		t.validateRegistrationCode()
+	}
+}
+
+func visitCodeLabel(visit models.Visit) string {
+	if visit.AccessCodeValue != "" {
+		return "Comanda " + visit.AccessCodeValue
+	}
+	return fmt.Sprintf("Comanda %03d", visit.CardNumber)
+}
+
+func (t *SalesTab) runUpdate(fn func()) {
+	if t.update != nil {
+		t.update(fn)
+		return
+	}
+	fn()
 }
 
 func paymentFromLabel(label string) models.PaymentMethod {

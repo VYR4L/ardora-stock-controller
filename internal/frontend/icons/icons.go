@@ -9,6 +9,7 @@ func parse(body string) *ui.SVG {
 var (
 	Home       = parse(`<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M9.5 20v-6h5v6"/>`)
 	Sales      = parse(`<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h5M8 16h3"/><path d="M16 14v4M14 16h4"/>`)
+	Codes      = parse(`<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM18 14h3M18 18h3v3h-3zM14 19v2"/>`)
 	Tables     = parse(`<rect x="4" y="5" width="16" height="10" rx="2"/><path d="M7 15v4M17 15v4M8 9h8"/>`)
 	Stock      = parse(`<path d="m4 7 8-4 8 4-8 4z"/><path d="M4 7v10l8 4 8-4V7M12 11v10"/>`)
 	Games      = parse(`<path d="M8 8h8a5 5 0 0 1 4.7 6.7l-1 2.8a2.2 2.2 0 0 1-3.8.6L14.3 16H9.7l-1.6 2.1a2.2 2.2 0 0 1-3.8-.6l-1-2.8A5 5 0 0 1 8 8Z"/><path d="M8 11v4M6 13h4M16.5 12.5h.01M18 14h.01"/>`)

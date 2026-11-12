@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ardora/stockcontroller/internal/backend/database"
+	"github.com/ardora/stockcontroller/internal/backend/models"
 )
 
 func createTableAndGame(t *testing.T, db *sql.DB) (int64, int64) {
@@ -28,12 +29,13 @@ func createTableAndGame(t *testing.T, db *sql.DB) (int64, int64) {
 func TestTableGameCatalogBroughtSwitchAndStop(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
+	generateAccessCodes(t, db, 8)
 	tableID, gameID := createTableAndGame(t, db)
 	service := NewTableGameService(db)
 	if err := service.StartCatalog(ctx, tableID, gameID); err == nil {
 		t.Fatal("expected empty table error")
 	}
-	visit, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, 8)
+	visit, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, "008")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +48,14 @@ func TestTableGameCatalogBroughtSwitchAndStop(t *testing.T) {
 	current, err := service.Current(ctx, tableID)
 	if err != nil || current.GameID == nil {
 		t.Fatalf("catalog session: %+v %v", current, err)
+	}
+	originalSessionID := current.ID
+	if err := NewGameService(db).Update(ctx, &models.Game{ID: gameID, Name: "Catan: Nova edição", MinPlayers: 1, MaxPlayers: 4, Active: true}); err != nil {
+		t.Fatal(err)
+	}
+	current, err = service.Current(ctx, tableID)
+	if err != nil || current.ID != originalSessionID || current.GameID == nil || *current.GameID != gameID || current.GameName != "Catan: Nova edição" {
+		t.Fatalf("renamed catalog session: %+v %v", current, err)
 	}
 	if err := service.StartBrought(ctx, tableID, "Azul do João", &visit.ClientID); err != nil {
 		t.Fatal(err)
@@ -72,12 +82,13 @@ func TestTableGameCatalogBroughtSwitchAndStop(t *testing.T) {
 func TestBroughtGameOwnerMustBeSeated(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
+	generateAccessCodes(t, db, 2)
 	tableID, _ := createTableAndGame(t, db)
-	ana, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, 1)
+	ana, err := NewVisitService(db).OpenVisit(ctx, "Ana", nil, "001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	bia, err := NewVisitService(db).OpenVisit(ctx, "Bia", nil, 2)
+	bia, err := NewVisitService(db).OpenVisit(ctx, "Bia", nil, "002")
 	if err != nil {
 		t.Fatal(err)
 	}

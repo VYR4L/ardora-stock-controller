@@ -52,7 +52,7 @@ func PageHeader(c *ui.Context, eyebrow, title, subtitle string, action *Action) 
 
 func Panel(c *ui.Context, title, subtitle string, minWidth float32, body func()) ui.Element {
 	tokens := style.FromContext(c)
-	panel := ui.Column(c).Gap(16).Padding(20).Grow(1).Background(tokens.Surface).Border(1, tokens.Border).Radius(14)
+	panel := ui.Column(c).Gap(16).Padding(20).Background(tokens.Surface).Border(1, tokens.Border).Radius(14)
 	if minWidth > 0 {
 		panel = panel.MinWidth(minWidth)
 	}

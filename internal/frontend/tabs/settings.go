@@ -78,7 +78,7 @@ func (t *SettingsTab) View(c *ui.Context) {
 						ui.Text(c, "A alteração será aplicada na próxima inicialização.").FontSize(12).TextColor(style.FromContext(c).Muted)
 					})
 				})
-			})
+			}).Grow(1)
 
 			components.Panel(c, "Backup e e-mail", "Gere o CSV diário e envie para o endereço configurado.", 320, func() {
 				ui.Field(c, "Chave da API Twilio/SendGrid", func() {
@@ -88,7 +88,7 @@ func (t *SettingsTab) View(c *ui.Context) {
 				ui.Field(c, "E-mail de destino", func() {
 					ui.TextInput(c, &t.targetEmail).Disabled(t.saving || t.backing)
 				})
-			})
+			}).Grow(1)
 
 			components.Panel(c, "Atendimento e recibo", "Defina a entrada e os dados exibidos no recibo não fiscal.", 320, func() {
 				ui.Field(c, "Preço padrão da entrada *", func() {
@@ -104,7 +104,7 @@ func (t *SettingsTab) View(c *ui.Context) {
 				ui.Field(c, "Endereço", func() {
 					ui.TextInput(c, &t.businessAddress).Disabled(t.saving || t.backing)
 				})
-			})
+			}).Grow(1)
 		})
 
 		components.Panel(c, "Ações", "Salve as preferências ou execute o relatório imediatamente.", 0, func() {

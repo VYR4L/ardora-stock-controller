@@ -143,4 +143,50 @@ SELECT id, game_id, '', created_at
 FROM tables
 WHERE game_id IS NOT NULL;
 `,
+	// 3: reusable command codes and legacy visit backfill.
+	`
+CREATE TABLE access_code_batches (
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	first_number    INTEGER NOT NULL CHECK (first_number BETWEEN 0 AND 999),
+	last_number     INTEGER NOT NULL CHECK (last_number BETWEEN first_number AND 999),
+	quantity        INTEGER NOT NULL CHECK (quantity > 0),
+	legacy          INTEGER NOT NULL DEFAULT 0 CHECK (legacy IN (0, 1)),
+	created_at      TEXT    NOT NULL,
+	last_printed_at TEXT
+);
+
+CREATE TABLE access_codes (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	batch_id    INTEGER NOT NULL REFERENCES access_code_batches(id),
+	number      INTEGER NOT NULL UNIQUE CHECK (number BETWEEN 0 AND 999),
+	value       TEXT    NOT NULL UNIQUE,
+	active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+	created_at  TEXT    NOT NULL,
+	archived_at TEXT
+);
+CREATE INDEX ix_access_codes_active_number ON access_codes(active, number);
+
+ALTER TABLE visits ADD COLUMN access_code_id INTEGER REFERENCES access_codes(id);
+
+INSERT INTO access_code_batches (first_number, last_number, quantity, legacy, created_at)
+SELECT MIN(card_number), MAX(card_number), COUNT(DISTINCT card_number), 1,
+	COALESCE(MIN(opened_at), strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
+FROM visits
+HAVING COUNT(*) > 0;
+
+INSERT INTO access_codes (batch_id, number, value, active, created_at)
+SELECT b.id, legacy_cards.card_number, printf('%03d', legacy_cards.card_number), 1, b.created_at
+FROM (SELECT DISTINCT card_number FROM visits) AS legacy_cards
+JOIN access_code_batches b ON b.legacy = 1;
+
+UPDATE visits
+SET access_code_id = (
+	SELECT ac.id FROM access_codes ac WHERE ac.number = visits.card_number
+);
+
+CREATE UNIQUE INDEX ux_visits_open_access_code
+	ON visits(access_code_id)
+	WHERE closed_at IS NULL AND access_code_id IS NOT NULL;
+CREATE INDEX ix_visits_access_code ON visits(access_code_id, opened_at);
+`,
 }

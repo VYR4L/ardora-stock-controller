@@ -29,15 +29,17 @@ type App struct {
 	themeDark     bool
 
 	// Services
-	imageService         *services.ImageService
-	gameService          *services.GameService
-	productService       *services.ProductService
-	salesService         *services.SalesService
-	visitService         *services.VisitService
-	receiptService       *services.ReceiptService
-	tableService         *services.TableService
-	tablesClientsService *services.TablesClientsService
-	tableGameService     *services.TableGameService
+	imageService           *services.ImageService
+	gameService            *services.GameService
+	productService         *services.ProductService
+	salesService           *services.SalesService
+	visitService           *services.VisitService
+	receiptService         *services.ReceiptService
+	accessCodeService      *services.AccessCodeService
+	accessCodePrintService *services.AccessCodePrintService
+	tableService           *services.TableService
+	tablesClientsService   *services.TablesClientsService
+	tableGameService       *services.TableGameService
 
 	// UI State
 	window      *mygo.Window
@@ -49,6 +51,7 @@ type App struct {
 	gamesTab    *tabs.GamesTab
 	stockTab    *tabs.StockTab
 	salesTab    *tabs.SalesTab
+	codesTab    *tabs.CodesTab
 	tablesTab   *tabs.TablesTab
 	settingsTab *tabs.SettingsTab
 }
@@ -111,6 +114,8 @@ func (a *App) init() error {
 	a.salesService = services.NewSalesService(db)
 	a.visitService = services.NewVisitService(db)
 	a.receiptService = services.NewReceiptService(db, layout.Receipts)
+	a.accessCodeService = services.NewAccessCodeService(db)
+	a.accessCodePrintService = services.NewAccessCodePrintService(db, layout.CodeSheets)
 	a.tableService = services.NewTableService(db)
 	a.tablesClientsService = services.NewTablesClientsService(db)
 	a.tableGameService = services.NewTableGameService(db)
@@ -121,17 +126,19 @@ func (a *App) init() error {
 
 	// Init tabs
 	state := &frontend.State{
-		Window:               a.window,
-		Layout:               a.layout,
-		ImageService:         a.imageService,
-		GameService:          a.gameService,
-		ProductService:       a.productService,
-		SalesService:         a.salesService,
-		VisitService:         a.visitService,
-		ReceiptService:       a.receiptService,
-		TableService:         a.tableService,
-		TablesClientsService: a.tablesClientsService,
-		TableGameService:     a.tableGameService,
+		Window:                 a.window,
+		Layout:                 a.layout,
+		ImageService:           a.imageService,
+		GameService:            a.gameService,
+		ProductService:         a.productService,
+		SalesService:           a.salesService,
+		VisitService:           a.visitService,
+		ReceiptService:         a.receiptService,
+		AccessCodeService:      a.accessCodeService,
+		AccessCodePrintService: a.accessCodePrintService,
+		TableService:           a.tableService,
+		TablesClientsService:   a.tablesClientsService,
+		TableGameService:       a.tableGameService,
 		Navigate: func(destination string) {
 			a.selectedTab = destination
 		},
@@ -141,6 +148,7 @@ func (a *App) init() error {
 	a.gamesTab = tabs.NewGamesTab(state)
 	a.stockTab = tabs.NewStockTab(state)
 	a.salesTab = tabs.NewSalesTab(state)
+	a.codesTab = tabs.NewCodesTab(state)
 	a.tablesTab = tabs.NewTablesTab(state)
 	a.settingsTab = tabs.NewSettingsTab(state, a.configService, backupService)
 
@@ -188,6 +196,7 @@ func renderAppShell(c *ui.Context, selectedTab *string, content func()) ui.Eleme
 			ui.Sidebar(c, selectedTab, func() {
 				ui.SidebarItem(c, "Home", icons.Home, "Visão geral")
 				ui.SidebarItem(c, "Sales", icons.Sales, "Vendas")
+				ui.SidebarItem(c, "Codes", icons.Codes, "Códigos")
 				ui.SidebarItem(c, "Tables", icons.Tables, "Mesas")
 				ui.SidebarItem(c, "Stock", icons.Stock, "Estoque")
 				ui.SidebarItem(c, "Games", icons.Games, "Jogos")
@@ -214,8 +223,12 @@ func (a *App) viewSelectedTab(c *ui.Context) {
 		switch a.selectedTab {
 		case "Sales":
 			a.salesTab.Refresh()
+		case "Codes":
+			a.codesTab.Refresh()
 		case "Tables":
 			a.tablesTab.Refresh()
+		case "Stock":
+			a.stockTab.Refresh()
 		}
 	}
 	switch a.selectedTab {
@@ -227,6 +240,8 @@ func (a *App) viewSelectedTab(c *ui.Context) {
 		a.stockTab.View(c)
 	case "Sales":
 		a.salesTab.View(c)
+	case "Codes":
+		a.codesTab.View(c)
 	case "Tables":
 		a.tablesTab.View(c)
 	case "Settings":

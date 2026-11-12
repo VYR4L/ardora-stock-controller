@@ -49,6 +49,62 @@ type Table struct {
 	CreatedAt time.Time
 }
 
+// RemovalKind describes the safe action available for a catalog record.
+type RemovalKind string
+
+const (
+	RemovalDelete  RemovalKind = "delete"
+	RemovalArchive RemovalKind = "archive"
+	RemovalBlocked RemovalKind = "blocked"
+)
+
+// RemovalPlan explains whether a record can be deleted, archived, or is in use.
+type RemovalPlan struct {
+	Kind    RemovalKind
+	Message string
+}
+
+// AccessCodeState is the operational state derived for a reusable code.
+type AccessCodeState string
+
+const (
+	AccessCodeAvailable AccessCodeState = "available"
+	AccessCodeInUse     AccessCodeState = "in_use"
+	AccessCodeArchived  AccessCodeState = "archived"
+)
+
+// AccessCodeBatch is one immutable sequential code generation.
+type AccessCodeBatch struct {
+	ID            int64
+	FirstNumber   int
+	LastNumber    int
+	Quantity      int
+	Legacy        bool
+	CreatedAt     time.Time
+	LastPrintedAt *time.Time
+}
+
+// AccessCode is one reusable physical command identifier.
+type AccessCode struct {
+	ID         int64
+	BatchID    int64
+	Number     int
+	Value      string
+	Active     bool
+	State      AccessCodeState
+	CreatedAt  time.Time
+	ArchivedAt *time.Time
+}
+
+// AccessCodeStats summarizes the reusable-code inventory.
+type AccessCodeStats struct {
+	Total      int
+	Available  int
+	InUse      int
+	Archived   int
+	NextNumber int
+}
+
 // PaymentMethod identifies how a completed visit was paid.
 type PaymentMethod string
 
@@ -66,6 +122,8 @@ type Visit struct {
 	ClientID                 int64
 	ClientName               string
 	ClientDocument           *string
+	AccessCodeID             *int64
+	AccessCodeValue          string
 	CardNumber               int
 	EntryPriceCents          int64
 	ConsumptionSubtotalCents int64
