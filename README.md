@@ -130,4 +130,4 @@ go build -ldflags "-H windowsgui" -o ardora.exe .
 
 ## 📄 Licença
 
-Uso interno e proprietário Ardora. Todos os direitos reservados.
+Este projeto está licenciado sob a Licença MIT – consulte o arquivo [LICENSE.txt](LICENSE.txt) para obter detalhes.
