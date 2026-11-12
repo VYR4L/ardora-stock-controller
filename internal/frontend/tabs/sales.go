@@ -42,13 +42,14 @@ type SalesTab struct {
 	availableCodes []models.AccessCode
 	availableCode  string
 
-	billVisit   string
-	billProduct string
-	billQty     string
-	billCode    string
-	billMsg     string
-	billOK      bool
-	billBusy    bool
+	billVisit     string
+	billProduct   string
+	billProductID int64
+	billQty       string
+	billCode      string
+	billMsg       string
+	billOK        bool
+	billBusy      bool
 
 	showCheckout    bool
 	checkoutVisitID int64
@@ -146,7 +147,7 @@ func (t *SalesTab) View(c *ui.Context) {
 					components.FeedbackBanner(c, t.billMsg, feedbackTone(t.billOK))
 				}
 				ui.Field(c, "Produto *", func() {
-					ui.Select(c, &t.billProduct, t.productOptions()).Disabled(t.billBusy || t.loading)
+					ui.Select(c, &t.billProduct, t.productOptions()).Disabled(t.billBusy || t.loading).OnChange(t.selectBillProduct)
 				})
 				ui.Field(c, "Quantidade *", func() { ui.TextInput(c, &t.billQty).Disabled(t.billBusy) })
 				ui.Field(c, "Código da comanda *", func() {
@@ -374,7 +375,7 @@ func (t *SalesTab) validateRegistrationCode() {
 func (t *SalesTab) billProductCharge() { t.billScannedCode() }
 
 func (t *SalesTab) billScannedCode() {
-	productID := t.productIDForOption(t.billProduct)
+	productID := t.selectedProductID()
 	quantity, err := strconv.Atoi(strings.TrimSpace(t.billQty))
 	code := strings.TrimSpace(t.billCode)
 	if productID == 0 || err != nil || quantity <= 0 || code == "" {
@@ -566,7 +567,16 @@ func (t *SalesTab) normalizeSelections() {
 	if t.visitIDForOption(t.billVisit) == 0 {
 		t.billVisit = "Selecione..."
 	}
-	if t.productIDForOption(t.billProduct) == 0 {
+	if t.billProductID == 0 {
+		t.billProductID = t.productIDForOption(t.billProduct)
+	}
+	if t.billProductID != 0 {
+		if product, ok := t.productForID(t.billProductID); ok {
+			t.billProduct = productOption(product)
+		} else {
+			t.billProductID, t.billProduct = 0, "Selecione..."
+		}
+	} else {
 		t.billProduct = "Selecione..."
 	}
 	if t.completedIDForOption(t.completedVisit) == 0 {
@@ -605,6 +615,27 @@ func (t *SalesTab) productIDForOption(option string) int64 {
 		}
 	}
 	return 0
+}
+
+func (t *SalesTab) productForID(id int64) (models.Product, bool) {
+	for _, product := range t.products {
+		if product.ID == id {
+			return product, true
+		}
+	}
+	return models.Product{}, false
+}
+
+func (t *SalesTab) selectBillProduct() {
+	t.billProductID = t.productIDForOption(t.billProduct)
+}
+
+func (t *SalesTab) selectedProductID() int64 {
+	if _, ok := t.productForID(t.billProductID); ok {
+		return t.billProductID
+	}
+	t.selectBillProduct()
+	return t.billProductID
 }
 
 func (t *SalesTab) completedIDForOption(option string) int64 {

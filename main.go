@@ -227,6 +227,8 @@ func (a *App) viewSelectedTab(c *ui.Context) {
 			a.codesTab.Refresh()
 		case "Tables":
 			a.tablesTab.Refresh()
+		case "Stock":
+			a.stockTab.Refresh()
 		}
 	}
 	switch a.selectedTab {

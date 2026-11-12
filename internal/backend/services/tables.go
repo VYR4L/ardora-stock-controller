@@ -81,12 +81,26 @@ func (s *TableService) Update(ctx context.Context, t *models.Table) error {
 	if err != nil {
 		return err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !t.Active {
+		plan, err := planTableRemoval(ctx, tx, t.ID)
+		if err != nil {
+			return err
+		}
+		if plan.Kind == models.RemovalBlocked {
+			return fmt.Errorf("%s", plan.Message)
+		}
+	}
 	active := 0
 	if t.Active {
 		active = 1
 	}
 
-	result, err := s.db.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		"UPDATE tables SET name = ?, game_id = ?, active = ? WHERE id = ?",
 		name, t.GameID, active, t.ID,
 	)
@@ -94,6 +108,9 @@ func (s *TableService) Update(ctx context.Context, t *models.Table) error {
 		return fmt.Errorf("update table: %w", err)
 	}
 	if err := requireOneRow(result, "table"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	t.Name = name

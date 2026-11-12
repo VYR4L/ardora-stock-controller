@@ -39,9 +39,9 @@ func TestProductEditPreservesIdentityAndUsesUpdate(t *testing.T) {
 	tab := &StockTab{
 		actions: stockActions{
 			create: func(context.Context, *models.Product) error { creates.Add(1); return nil },
-			update: func(_ context.Context, item *models.Product) error {
+			update: func(_ context.Context, item *models.Product, expectedStock int) error {
 				saves.Add(1)
-				if item.ID != 42 || item.Image != "cafe.png" || !item.Active {
+				if item.ID != 42 || item.Image != "cafe.png" || !item.Active || expectedStock != product.Stock {
 					t.Fatalf("updated product = %+v", item)
 				}
 				return nil

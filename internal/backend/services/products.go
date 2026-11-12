@@ -104,6 +104,46 @@ func (s *ProductService) Update(ctx context.Context, p *models.Product) error {
 	return nil
 }
 
+// UpdateCatalog updates catalog fields without overwriting intervening sales.
+// expectedStock is the value loaded when the edit form opened.
+func (s *ProductService) UpdateCatalog(ctx context.Context, p *models.Product, expectedStock int) error {
+	name, category, err := validateProduct(p)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format(database.TimeLayout)
+	active := 0
+	if p.Active {
+		active = 1
+	}
+
+	var result sql.Result
+	if p.Stock == expectedStock {
+		result, err = s.db.ExecContext(ctx,
+			"UPDATE products SET name = ?, category = ?, price_cents = ?, min_stock = ?, image = ?, active = ?, updated_at = ? WHERE id = ?",
+			name, category, p.PriceCents, p.MinStock, p.Image, active, now, p.ID,
+		)
+	} else {
+		result, err = s.db.ExecContext(ctx,
+			"UPDATE products SET name = ?, category = ?, price_cents = ?, stock = ?, min_stock = ?, image = ?, active = ?, updated_at = ? WHERE id = ? AND stock = ?",
+			name, category, p.PriceCents, p.Stock, p.MinStock, p.Image, active, now, p.ID, expectedStock,
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("update product catalog: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("product stock changed while editing; reload and try again")
+	}
+	p.Name, p.Category = name, category
+	p.UpdatedAt, _ = time.ParseInLocation(database.TimeLayout, now, time.Local)
+	return nil
+}
+
 // PlanRemoval reports whether a product can be deleted or must be archived.
 func (s *ProductService) PlanRemoval(ctx context.Context, id int64) (models.RemovalPlan, error) {
 	return planProductRemoval(ctx, s.db, id)

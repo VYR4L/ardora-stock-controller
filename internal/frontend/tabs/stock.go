@@ -33,6 +33,7 @@ type StockTab struct {
 	formImage string
 	formMsg   string
 	saving    bool
+	formStock int
 
 	showRemove   bool
 	removeTarget models.Product
@@ -42,7 +43,7 @@ type StockTab struct {
 
 type stockActions struct {
 	create      func(context.Context, *models.Product) error
-	update      func(context.Context, *models.Product) error
+	update      func(context.Context, *models.Product, int) error
 	planRemoval func(context.Context, int64) (models.RemovalPlan, error)
 	remove      func(context.Context, int64) (models.RemovalPlan, error)
 }
@@ -65,7 +66,7 @@ func NewStockTab(s *frontend.State) *StockTab {
 		if s.ProductService != nil {
 			t.actions = stockActions{
 				create:      s.ProductService.Create,
-				update:      s.ProductService.Update,
+				update:      s.ProductService.UpdateCatalog,
 				planRemoval: s.ProductService.PlanRemoval,
 				remove:      s.ProductService.Remove,
 			}
@@ -92,6 +93,9 @@ func (t *StockTab) loadProducts() {
 		})
 	}()
 }
+
+// Refresh reloads products after sales or external catalog changes.
+func (t *StockTab) Refresh() { t.loadProducts() }
 
 func (t *StockTab) View(c *ui.Context) {
 	components.Page(c, func() {
@@ -205,6 +209,7 @@ func (t *StockTab) renderProduct(c *ui.Context, product models.Product) {
 
 func (t *StockTab) openCreate() {
 	t.formItem = models.Product{Active: true, Category: "Outros"}
+	t.formStock = 0
 	t.formImage = ""
 	t.formMsg = ""
 	t.showModal = true
@@ -212,6 +217,7 @@ func (t *StockTab) openCreate() {
 
 func (t *StockTab) openEdit(product models.Product) {
 	t.formItem = product
+	t.formStock = product.Stock
 	t.formImage = ""
 	t.formMsg = ""
 	t.showModal = true
@@ -335,7 +341,7 @@ func (t *StockTab) saveForm() {
 		if item.ID == 0 {
 			err = t.actions.create(context.Background(), &item)
 		} else {
-			err = t.actions.update(context.Background(), &item)
+			err = t.actions.update(context.Background(), &item, t.formStock)
 		}
 		t.runUpdate(func() {
 			t.saving = false

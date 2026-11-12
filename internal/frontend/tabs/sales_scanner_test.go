@@ -140,6 +140,39 @@ func TestSalesScannerBillsOnlyOneInFlightSubmission(t *testing.T) {
 	}
 }
 
+func TestSalesScannerKeepsProductSelectionAfterStockRefresh(t *testing.T) {
+	product := models.Product{ID: 9, Name: "Café", PriceCents: 700, Stock: 4, Active: true}
+	updated := make(chan struct{}, 2)
+	var calls atomic.Int32
+	tab := &SalesTab{
+		products:      []models.Product{product},
+		billProduct:   productOption(product),
+		billProductID: product.ID,
+		billQty:       "1",
+		actions: salesActions{billProductByCode: func(context.Context, string, int64, int) (*models.Visit, error) {
+			calls.Add(1)
+			return &models.Visit{ID: 3, AccessCodeValue: "001"}, nil
+		}},
+		update: func(fn func()) { fn(); updated <- struct{}{} },
+	}
+
+	tab.billCode = "001"
+	tab.billScannedCode()
+	<-updated
+	product.Stock = 3
+	tab.products = []models.Product{product}
+	tab.normalizeSelections()
+	if tab.billProductID != product.ID || tab.billProduct != productOption(product) {
+		t.Fatalf("selection after refresh id=%d option=%q", tab.billProductID, tab.billProduct)
+	}
+	tab.billCode = "002"
+	tab.billScannedCode()
+	<-updated
+	if calls.Load() != 2 {
+		t.Fatalf("repeated service billed %d times", calls.Load())
+	}
+}
+
 func TestSalesScannerCheckoutLookupOpensPreviewWithoutClosing(t *testing.T) {
 	updates := make(chan struct{}, 1)
 	var lookups atomic.Int32

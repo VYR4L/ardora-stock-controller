@@ -89,6 +89,54 @@ func TestProductRemovalPoliciesAndValidation(t *testing.T) {
 	}
 }
 
+func TestProductCatalogUpdateDoesNotRestoreStockChangedBySale(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	service := NewProductService(db)
+	product := models.Product{Name: "Café", Category: "Bebidas", PriceCents: 900, Stock: 10, MinStock: 2, Active: true}
+	if err := service.Create(ctx, &product); err != nil {
+		t.Fatal(err)
+	}
+	originalStock := product.Stock
+	if _, err := db.ExecContext(ctx, "UPDATE products SET stock = stock - 1 WHERE id = ?", product.ID); err != nil {
+		t.Fatal(err)
+	}
+	product.Name = "Café especial"
+	if err := service.UpdateCatalog(ctx, &product, originalStock); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	var stock int
+	if err := db.QueryRowContext(ctx, "SELECT name, stock FROM products WHERE id = ?", product.ID).Scan(&name, &stock); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Café especial" || stock != 9 {
+		t.Fatalf("catalog update stored name=%q stock=%d", name, stock)
+	}
+}
+
+func TestProductCatalogStockEditRejectsConcurrentSale(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	service := NewProductService(db)
+	product := models.Product{Name: "Café", Category: "Bebidas", PriceCents: 900, Stock: 10, MinStock: 2, Active: true}
+	if err := service.Create(ctx, &product); err != nil {
+		t.Fatal(err)
+	}
+	originalStock := product.Stock
+	product.Stock = 15
+	if _, err := db.ExecContext(ctx, "UPDATE products SET stock = stock - 1 WHERE id = ?", product.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.UpdateCatalog(ctx, &product, originalStock); err == nil {
+		t.Fatal("concurrent stock edit succeeded")
+	}
+	var stock int
+	if err := db.QueryRowContext(ctx, "SELECT stock FROM products WHERE id = ?", product.ID).Scan(&stock); err != nil || stock != 9 {
+		t.Fatalf("stock after conflict = %d, %v", stock, err)
+	}
+}
+
 func TestGameRemovalPoliciesAndValidation(t *testing.T) {
 	ctx := context.Background()
 
@@ -275,6 +323,14 @@ func TestTableRemovalPoliciesRaceAndRelationships(t *testing.T) {
 		if removed, err := service.Remove(ctx, occupied.ID); err == nil || removed.Kind != models.RemovalBlocked {
 			t.Fatalf("occupied table removal = %+v, %v", removed, err)
 		}
+		occupied.Active = false
+		if err := service.Update(ctx, &occupied); err == nil {
+			t.Fatal("occupied table was deactivated through update")
+		}
+		var active int
+		if err := db.QueryRowContext(ctx, "SELECT active FROM tables WHERE id = ?", occupied.ID).Scan(&active); err != nil || active != 1 {
+			t.Fatalf("occupied table active=%d, err=%v", active, err)
+		}
 
 		playing := models.Table{Name: "Em jogo", Active: true}
 		if err := service.Create(ctx, &playing); err != nil {
@@ -287,6 +343,13 @@ func TestTableRemovalPoliciesRaceAndRelationships(t *testing.T) {
 		plan, err = service.PlanRemoval(ctx, playing.ID)
 		if err != nil || plan.Kind != models.RemovalBlocked {
 			t.Fatalf("playing table plan = %+v, %v", plan, err)
+		}
+		playing.Active = false
+		if err := service.Update(ctx, &playing); err == nil {
+			t.Fatal("playing table was deactivated through update")
+		}
+		if err := db.QueryRowContext(ctx, "SELECT active FROM tables WHERE id = ?", playing.ID).Scan(&active); err != nil || active != 1 {
+			t.Fatalf("playing table active=%d, err=%v", active, err)
 		}
 	})
 
